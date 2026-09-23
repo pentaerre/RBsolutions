@@ -1,0 +1,23 @@
+---
+description: Atrium north star — 2-person agent company, not a CRUD chatbot
+alwaysApply: true
+---
+
+# Atrium
+
+Two people selling **agent-run automation** to companies of 100–1000 people. CRUD SaaS is too easy now. We sell **outcomes on channels they already use**, not another form.
+
+## Non-negotiables
+
+- New capability = **an agent + a tool in the catalog**. Not a random Python function with a button.
+- Orchestrator routes. Specialists do one job. Humans see the same graph as the model (Admin → Graph).
+- Do not add a second chatbot. Do not replace LangGraph with if-else. Do not add Chroma.
+- Mid-market IDP line stays: intake → parse → classify → GraphRAG and/or SQL → human review → notify (Telegram/email).
+- GraphRAG over vector-only RAG. Neo4j holds entities and relations; Qdrant holds chunk vectors; hybrid retrieve.
+- Local-first: Ollama on the host. Do not block the folder watcher on the 32b model (`EXTRACT_WITH_LLM` / graph LLM off by default).
+- Channels (Telegram, IMAP) are agents (Courier, Mailroom), not “integrations pages”.
+- Scribe keeps the AGENTS.md roster in sync with the catalog. Do not hand-copy agent lists.
+
+## When lost
+
+Read `AGENTS.md`, then `docs/HOW_IT_WORKS.md`. If a change is not an agent, a tool, or the graph those agents share, it is probably the wrong change.

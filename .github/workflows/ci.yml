@@ -1,0 +1,38 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  api:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build API image
+        run: docker build -t atrium-api:test ./apps/api
+      - name: Run API tests
+        run: >
+          docker run --rm
+          -e WATCH_DOCUMENTS=false
+          -e EMBEDDING_BACKEND=hash
+          -e CHROMA_DIR=/tmp/chroma
+          -e DOCUMENTS_DIR=/tmp/docs
+          -e DATABASE_URL=sqlite:////tmp/atrium-test.db
+          -e QDRANT_URL=memory
+          -e NEO4J_URI=
+          atrium-api:test pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build workspace image
+        run: docker build -t atrium-web:test ./apps/web
+
+  admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build admin image
+        run: docker build -t atrium-admin:test ./apps/admin

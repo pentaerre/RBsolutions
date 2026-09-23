@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".cursor/hooks/inject-roster.py"
+      }
+    ],
+    "afterFileEdit": [
+      {
+        "command": ".cursor/hooks/catalog-changed.py",
+        "matcher": "seed\\.py|graph\\.py|tools\\.py"
+      }
+    ]
+  }
+}
