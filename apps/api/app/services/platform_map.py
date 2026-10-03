@@ -99,7 +99,7 @@ def explain_platform(db: Session) -> str:
     lines.append("")
     lines.append("Data: Postgres = catalog + extracted SQL rows, Qdrant = chunk vectors, Neo4j = document graph.")
     lines.append("Library path: folder/email → Watchman/Mailroom → Reader (OCR) → the live Taxonomist instance. Same oficio, one sold tree at a time (E&P live; Aircraft, Car, Factory, Bars, Advice parked). Operators promote selected files into GraphRAG; arrivals are not dumped into the index.")
-    lines.append("Operations brief: shared-inbox letters → Sentinel → Neo4j party plus SQL ledger → Reviewer holds the brief. A high signal names the subject and the sender address, then goes to the worker on the notify knob: Courier (Telegram) is live; Teams and Post stay parked until that agent is enabled.")
+    lines.append("Operations brief: Mailroom stores the letter. Sentinel classifies it (legal, opportunity, churn) and writes subject and sender. Pathfinder names a project only when that neighbor exists. Recorder writes a figure only when that SQL row exists. Reviewer holds the brief. A high signal goes to the channel on the notify knob: Courier (Telegram) is live; Teams and Post stay parked. An inactive channel does not count as delivered.")
     lines.append("IDP pipeline: Parser → Triage → Chunker (RAG) and/or Extractor→Recorder (SQL) → Clerk.")
     lines.append("Chat flow: user → orchestrator (LangGraph router) → specialist agents.")
     return "\n".join(lines)

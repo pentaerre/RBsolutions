@@ -82,6 +82,19 @@ def _register(db: Session, _: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "tool": "intake.register", **result}
 
 
+def _store_letters(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.sentinel import ingest_drop, store_letters
+
+    letters = payload.get("letters")
+    if isinstance(letters, dict):
+        letters = [letters]
+    stored = store_letters(db, letters if isinstance(letters, list) else None)
+    stored += ingest_drop(db)
+    if stored:
+        db.commit()
+    return {"ok": True, "tool": "intake.store_letters", "stored": stored}
+
+
 def _poll_mail(db: Session, _: dict[str, Any]) -> dict[str, Any]:
     from app.services.sentinel import store_letters
 
@@ -232,11 +245,11 @@ def _telegram_poll(db: Session, _: dict[str, Any]) -> dict[str, Any]:
     return {"ok": result.get("ok", False), "tool": "telegram.poll", **result}
 
 
-def _telegram_send(_db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    from app.services.telegram import send_message
+def _telegram_send(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.channels import deliver
 
     text = str(payload.get("text") or payload.get("message") or "")
-    result = send_message(text)
+    result = deliver(db, "courier", text)
     return {"ok": result.get("ok", False), "tool": "telegram.send", **result}
 
 
@@ -262,13 +275,46 @@ def _review_list(db: Session, _: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "tool": "review.list", **list_exceptions(db)}
 
 
+def _review_hold(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    from app.services.reviewer import hold_signals
+
+    return {"ok": True, "tool": "review.hold", **hold_signals(db)}
+
+
+def _signals_judge(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    from app.services.sentinel import judge
+
+    return {"ok": True, "tool": "signals.judge", **judge(db)}
+
+
+def _signals_graph(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.brief_cross import attach_graph
+
+    ids = payload.get("ids")
+    return {"ok": True, "tool": "signals.graph", **attach_graph(db, ids if isinstance(ids, list) else None)}
+
+
+def _signals_book(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.brief_cross import attach_book
+
+    ids = payload.get("ids")
+    return {"ok": True, "tool": "signals.book", **attach_book(db, ids if isinstance(ids, list) else None)}
+
+
+def _signals_notify(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.brief_line import notify_signals
+
+    ids = payload.get("ids")
+    return {"ok": True, "tool": "signals.notify", **notify_signals(db, ids if isinstance(ids, list) else None)}
+
+
 def _signals_scan(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
-    from app.services.sentinel import scan
+    from app.services.brief_line import run_line
 
     letters = payload.get("letters")
     if isinstance(letters, dict):
         letters = [letters]
-    result = scan(db, letters if isinstance(letters, list) else None)
+    result = run_line(db, letters if isinstance(letters, list) else None)
     return {"ok": True, "tool": "signals.scan", **result}
 
 
@@ -295,6 +341,7 @@ BUILTIN = {
     "intake.list": _list_inbox,
     "intake.register": _register,
     "intake.poll_mail": _poll_mail,
+    "intake.store_letters": _store_letters,
     "taxonomy.run": _taxonomy_run,
     "taxonomy.list": _taxonomy_list,
     "taxonomy.get": _taxonomy_get,
@@ -305,6 +352,11 @@ BUILTIN = {
     "teams.send": _teams_send,
     "mail.send": _mail_send,
     "review.list": _review_list,
+    "review.hold": _review_hold,
+    "signals.judge": _signals_judge,
+    "signals.graph": _signals_graph,
+    "signals.book": _signals_book,
+    "signals.notify": _signals_notify,
     "signals.scan": _signals_scan,
     "signals.list": _signals_list,
     "models.list": _list_models,

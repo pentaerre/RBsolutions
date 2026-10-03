@@ -22,7 +22,7 @@ const NODE_ES: Record<string, { label?: string; detail?: string }> = {
   admin: { label: "Admin", detail: ":3001 plano de control" },
   watchman: { detail: "Ve archivos nuevos" },
   mailroom: { detail: "Descarga adjuntos" },
-  sentinel: { detail: "Brief de bandejas compartidas" },
+  sentinel: { detail: "Clasifica la carta" },
   courier: { detail: "Telegram entra / sale" },
   teams: { detail: "Webhook apagado" },
   post: { detail: "SMTP apagado" },

@@ -207,8 +207,8 @@ UTILITIES: list[dict[str, Any]] = [
     {
         "slug": "operations",
         "name": "Operations brief",
-        "summary": "Shared inboxes for direction: Sentinel flags legal risk, stale commercial asks, and churn, then crosses Neo4j and the SQL ledger. Reviewer holds the brief. Courier pings Telegram.",
-        "workspace_path": "/chat",
+        "summary": "Shared inboxes for direction. Mailroom saves the letter. Sentinel classifies it. Pathfinder names a project only from the graph. Recorder writes a figure only from the SQL book. Reviewer holds it. Courier delivers a high alarm with subject and sender.",
+        "workspace_path": "/brief",
         "agents": ["mailroom", "sentinel", "pathfinder", "recorder", "reviewer", "courier", "teams", "post"],
     },
 ]

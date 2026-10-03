@@ -1,8 +1,9 @@
-"""Sentinel — briefs for direction from shared inboxes.
+"""Sentinel — classifies a shared-inbox letter.
 
-Mailroom stores the letter. This oficio decides whether direction should see it,
-then crosses the party with Neo4j and the SQL ledger. It does not answer the
-employee who received the mail, and it does not call the 32b model.
+Mailroom stores the letter. This oficio only decides legal, opportunity, or churn
+and writes the brief with subject and sender. Pathfinder crosses Neo4j, Recorder
+reads the SQL book, Reviewer holds the exception, and the channel agent notifies.
+It does not answer the employee who received the mail, and it does not call the 32b model.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db.models import ExtractedRecord, MailboxLetter, OperationalSignal
+from app.db.models import MailboxLetter, OperationalSignal
 
 logger = logging.getLogger("atrium.sentinel")
 
@@ -58,7 +59,6 @@ RULES: dict[str, list[tuple[str, str]]] = {
     ],
 }
 
-LEDGER_HINTS = ("penalty", "penalizacion", "penalización", "contract", "contrato", "clause", "clausula", "cláusula")
 FREE_HOSTS = {"gmail", "outlook", "hotmail", "yahoo", "mail", "googlemail"}
 
 
@@ -123,15 +123,14 @@ def store_letters(db: Session, letters: list[dict[str, Any]] | None) -> int:
     return added
 
 
-def scan(db: Session, letters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def judge(db: Session) -> dict[str, Any]:
+    """Classify stored letters. Does not read the graph, the book, or a channel."""
     from app.services.knobs import agent_config
 
     cfg = agent_config(db, "sentinel")
     allowed = _mailboxes(cfg)
     enabled = _enabled(cfg)
     stale_hours = _stale_hours(cfg)
-    stored = store_letters(db, letters)
-    stored += _ingest_drop(db)
     pending = (
         db.query(MailboxLetter)
         .filter(MailboxLetter.scanned == 0)
@@ -150,16 +149,13 @@ def scan(db: Session, letters: list[dict[str, Any]] | None = None) -> dict[str, 
         severity = hit["severity"]
         if hit["kind"] == "opportunity" and age is not None and age >= stale_hours:
             severity = "high"
-        graph = cross_graph(hit["party"])
-        ledger = cross_ledger(db, hit["party"])
-        brief = render_brief(
+        brief = render_judgment(
             kind=hit["kind"],
             severity=severity,
             party=hit["party"],
             subject=letter.subject,
             evidence=hit["evidence"],
-            graph=graph,
-            ledger=ledger,
+            sender=letter.sender,
             age_hours=age if severity == "high" and hit["kind"] == "opportunity" else None,
             stale_hours=stale_hours,
         )
@@ -170,27 +166,28 @@ def scan(db: Session, letters: list[dict[str, Any]] | None = None) -> dict[str, 
             party=hit["party"],
             evidence=hit["evidence"],
             brief=brief,
-            graph_json=json.dumps(graph, ensure_ascii=False),
-            ledger_json=json.dumps(ledger, ensure_ascii=False),
+            graph_json="",
+            ledger_json="",
             status="open",
             notified=0,
         )
         db.add(row)
         db.flush()
-        created.append(_signal_dict(row, letter.subject, letter.sender))
-    notified, channel, delivery = _notify_new(db, created)
+        created.append(signal_dict(row))
     db.commit()
     return {
         "ok": True,
-        "stored": stored,
         "scanned": len(pending),
         "created": len(created),
-        "notified": notified,
-        "channel": channel,
-        "delivery": delivery,
         "signals": created,
-        "open": list_signals(db).get("signals") or [],
     }
+
+
+def scan(db: Session, letters: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """Brief line: each oficio is another agent's tool. Sentinel only judges."""
+    from app.services.brief_line import run_line
+
+    return run_line(db, letters)
 
 
 def list_signals(db: Session, limit: int = 40) -> dict[str, Any]:
@@ -202,70 +199,20 @@ def list_signals(db: Session, limit: int = 40) -> dict[str, Any]:
         .all()
     )
     signals = [
-        _signal_dict(row, row.letter.subject if row.letter else "", row.letter.sender if row.letter else "")
+        signal_dict(row)
         for row in rows
     ]
     return {"ok": True, "count": len(signals), "signals": signals}
 
 
-def cross_graph(party: str) -> dict[str, Any]:
-    if not party:
-        return {"enabled": False, "entities": []}
-    try:
-        from app.services.graphstore import get_graphstore
-
-        result = get_graphstore().entity_search(party)
-    except Exception:
-        logger.debug("Graph cross failed", exc_info=True)
-        return {"enabled": False, "entities": []}
-    entities = []
-    for item in (result.get("entities") or [])[:5]:
-        entities.append(
-            {
-                "name": item.get("name") or "",
-                "kind": item.get("kind") or "",
-                "neighbors": list(item.get("neighbors") or [])[:8],
-                "files": list(item.get("files") or [])[:5],
-            }
-        )
-    return {"enabled": bool(result.get("enabled")), "entities": entities}
-
-
-def cross_ledger(db: Session, party: str) -> list[dict[str, str]]:
-    needle = party.strip().lower()
-    if len(needle) < 3:
-        return []
-    found: list[dict[str, str]] = []
-    rows = db.query(ExtractedRecord).order_by(ExtractedRecord.created_at.desc()).limit(80).all()
-    for row in rows:
-        try:
-            payload = json.loads(row.payload_json or "{}")
-        except json.JSONDecodeError:
-            continue
-        blob = json.dumps(payload, ensure_ascii=False).lower()
-        if needle not in blob:
-            continue
-        hint = ""
-        if isinstance(payload, dict):
-            for key, value in payload.items():
-                if str(key).lower() in LEDGER_HINTS and value not in (None, ""):
-                    hint = f"{key}={value}"
-                    break
-        found.append({"kind": row.kind, "hint": hint[:160]})
-        if len(found) >= 3:
-            break
-    return found
-
-
-def render_brief(
+def render_judgment(
     *,
     kind: str,
     severity: str,
     party: str,
     subject: str,
     evidence: str,
-    graph: dict[str, Any],
-    ledger: list[dict[str, str]],
+    sender: str,
     age_hours: float | None,
     stale_hours: int,
 ) -> str:
@@ -277,27 +224,10 @@ def render_brief(
     level = {"high": "alto", "medium": "medio", "low": "bajo"}.get(severity, severity)
     who = party or "remitente desconocido"
     title = subject.strip() or "(sin asunto)"
-    parts = [f"{titles.get(kind, kind)} {level}: {who} en «{title}». Señal: «{evidence}»."]
+    who_sent = (sender or "").strip() or "desconocido"
+    parts = [f"{titles.get(kind, kind)} {level}: {who} en «{title}». Señal: «{evidence}». De: {who_sent}"]
     if age_hours is not None and kind == "opportunity":
         parts.append(f"Lleva más de {stale_hours} h sin atención.")
-    entities = graph.get("entities") or []
-    if entities:
-        bits = []
-        for item in entities[:3]:
-            neighbors = ", ".join(item.get("neighbors") or [])
-            label = item.get("name") or who
-            bits.append(f"{label} → {neighbors}" if neighbors else label)
-        parts.append("Grafo: " + "; ".join(bits) + ".")
-    elif graph.get("enabled"):
-        parts.append(f"El grafo no tiene a {who}.")
-    else:
-        parts.append("Sin cruce de grafo (Neo4j apagado).")
-    if ledger:
-        hints = [item["hint"] for item in ledger if item.get("hint")]
-        if hints:
-            parts.append("Libro: " + "; ".join(hints) + ".")
-        else:
-            parts.append(f"Libro: {len(ledger)} fila(s) mencionan a {who}.")
     return " ".join(parts)
 
 
@@ -333,7 +263,7 @@ def parse_when(value: Any) -> datetime | None:
         return None
 
 
-def _ingest_drop(db: Session) -> int:
+def ingest_drop(db: Session) -> int:
     folder = signals_drop()
     added = 0
     seen = folder / "seen"
@@ -353,28 +283,9 @@ def _ingest_drop(db: Session) -> int:
     return added
 
 
-def _notify_new(db: Session, created: list[dict[str, Any]]) -> tuple[int, str, str]:
-    from app.services.channels import alarm_text, deliver
-    from app.services.knobs import agent_config
-
-    channel = str(agent_config(db, "sentinel").get("notify") or "courier")
-    highs = [item for item in created if item.get("severity") == "high"]
-    if not highs:
-        return 0, channel, ""
-    text = "Sentinel\n\n" + "\n\n".join(alarm_text(item) for item in highs[:8])
-    result = deliver(db, channel, text)
-    if not result.get("ok"):
-        return 0, channel, str(result.get("message") or "")
-    ids = [item["id"] for item in highs if item.get("id")]
-    if ids:
-        db.query(OperationalSignal).filter(OperationalSignal.id.in_(ids)).update(
-            {OperationalSignal.notified: 1},
-            synchronize_session=False,
-        )
-    return len(ids), channel, ""
-
-
-def _signal_dict(row: OperationalSignal, subject: str, sender: str = "") -> dict[str, Any]:
+def signal_dict(row: OperationalSignal) -> dict[str, Any]:
+    subject = row.letter.subject if row.letter else ""
+    sender = row.letter.sender if row.letter else ""
     try:
         graph = json.loads(row.graph_json or "{}")
     except json.JSONDecodeError:

@@ -58,12 +58,20 @@ CANONICAL_ROUTES = [
     {"match": ["chunk"], "agent": "chunker"},
     {"match": ["extract entities", "build the knowledge graph", "graphsmith"], "agent": "graphsmith"},
     {
-        "match": ["graphrag", "who is connected", "related to", "which entities", "pathfinder"],
+        "match": [
+            "graphrag",
+            "who is connected",
+            "related to",
+            "which entities",
+            "pathfinder",
+            "party in the graph",
+            "vecino en el grafo",
+        ],
         "agent": "pathfinder",
     },
     {"match": ["extract", "structured", "to sql", "into sql"], "agent": "extractor"},
-    {"match": ["records", "sql rows"], "agent": "recorder"},
-    {"match": ["exception", "review", "human gate", "approve"], "agent": "reviewer"},
+    {"match": ["records", "sql rows", "sql book", "libro sql"], "agent": "recorder"},
+    {"match": ["exception", "review", "human gate", "approve", "hold the brief", "retener el brief"], "agent": "reviewer"},
     {"match": ["organize", "classified", "file them", "folder tree", "estructura de carpetas", "filing cabinet"], "agent": "clerk"},
     {"match": ["parse the", "parse files"], "agent": "parser"},
     {"match": ["ingest", "index", "reindex", "pipeline"], "agent": "ingestor"},
@@ -100,9 +108,39 @@ def seed_catalog(db: Session) -> None:
         _tool("intake.register", "Register arrivals", "Register new inbox files (including subfolders) without sending them to RAG.", "builtin:intake.register"),
         _tool("intake.poll_mail", "Poll mailbox", "Download supported email attachments into the inbox folder.", "builtin:intake.poll_mail"),
         _tool(
+            "intake.store_letters",
+            "Store letters",
+            "Mailroom saves a shared-inbox letter for Sentinel. The judge does not ingest mail.",
+            "builtin:intake.store_letters",
+        ),
+        _tool(
+            "signals.judge",
+            "Judge a letter",
+            "Classify a stored letter as legal, opportunity, or churn and write the brief with subject and sender. Local patterns. No 32b call.",
+            "builtin:signals.judge",
+        ),
+        _tool(
+            "signals.graph",
+            "Cross the party",
+            "Pathfinder looks the party up in Neo4j. The brief names a project only when that neighbor exists.",
+            "builtin:signals.graph",
+        ),
+        _tool(
+            "signals.book",
+            "Read the SQL book",
+            "Recorder reads SQL rows. A figure is written only when that value is already a row.",
+            "builtin:signals.book",
+        ),
+        _tool(
+            "signals.notify",
+            "Notify the channel",
+            "Send a high brief through the channel agent on the notify knob. An inactive agent does not count as delivered.",
+            "builtin:signals.notify",
+        ),
+        _tool(
             "signals.scan",
-            "Scan shared inboxes",
-            "Judge stored shared-inbox letters for legal risk, unanswered commercial asks, and churn. Cross Neo4j and the SQL ledger.",
+            "Run the brief line",
+            "Mailroom stores, Sentinel judges, Pathfinder crosses the graph, Recorder reads the book, Reviewer holds, then the channel notifies.",
             "builtin:signals.scan",
         ),
         _tool(
@@ -142,6 +180,12 @@ def seed_catalog(db: Session) -> None:
             "builtin:mail.send",
         ),
         _tool("review.list", "List exceptions", "Show files and extracts that need a human (Reviewer).", "builtin:review.list"),
+        _tool(
+            "review.hold",
+            "Hold the brief",
+            "Reviewer holds an open direction brief, including the sender. It stays open when the channel agent is off.",
+            "builtin:review.hold",
+        ),
         _tool("records.extract", "Extract records", "Turn invoices and spreadsheets into structured rows (heuristic, optional LLM).", "builtin:records.extract"),
         _tool("records.list", "List SQL records", "Read structured rows written to Postgres.", "builtin:records.list"),
         _tool("models.list", "List Models", "List Ollama models available on this server.", "builtin:models.list"),
@@ -174,9 +218,9 @@ def seed_catalog(db: Session) -> None:
             name="Mailroom",
             role="specialist",
             status="live",
-            summary="Polls IMAP, downloads attachments (PDF, Office, text) onto the server inbox, and stores the letter for Sentinel.",
+            summary="Polls IMAP, downloads attachments onto the server inbox, and stores the letter. Does not classify it.",
             model=settings.ollama_chat_model,
-            system_prompt="You collect email attachments and store the letter. If IMAP is not configured, say exactly how to set it.",
+            system_prompt="You collect email attachments and store the letter. Sentinel classifies it. If IMAP is not configured, say exactly how to set it.",
             config_json=json.dumps({"imap_folder": settings.imap_folder or "INBOX", "poll_seconds": settings.imap_poll_seconds or 0}),
         ),
         Agent(
@@ -185,15 +229,14 @@ def seed_catalog(db: Session) -> None:
             role="specialist",
             status="live",
             summary=(
-                "Briefs direction from shared inboxes (pedidos, soporte, licitaciones). "
-                "Flags legal risk, stale commercial asks, and churn or SLA slips, then crosses the party with Neo4j and the SQL ledger. "
-                "Reviewer holds the brief. A high signal goes to the worker selected on notify: Courier (Telegram) now, Teams or Post when that agent is enabled. The message names the subject and the sender address. Does not call the 32b model."
+                "Classifies a shared-inbox letter as legal, opportunity, or churn and writes the brief with subject and sender (De: name and address). "
+                "Local patterns only. Does not call the 32b model, does not cross Neo4j, does not read the SQL book, and does not notify."
             ),
             model="",
             system_prompt=(
-                "You brief direction on shared-inbox letters. Use signals.scan and signals.list. "
-                "Do not invent penalties or contracts that the graph and the ledger did not return. "
-                "Do not draft a reply for the employee who received the mail."
+                "You only classify the letter and write the brief with subject and sender. Use signals.judge and signals.list. "
+                "Pathfinder crosses Neo4j, Recorder reads the SQL book, Reviewer holds the exception, and the channel agent notifies. "
+                "Do not invent a project or a penalty. Do not draft a reply."
             ),
             config_json=json.dumps(
                 {
@@ -273,9 +316,9 @@ def seed_catalog(db: Session) -> None:
             name="Recorder",
             role="specialist",
             status="live",
-            summary="Reads the SQL table of extracted rows (invoices, spreadsheet lines).",
+            summary="Reads the SQL table of extracted rows. On a brief, writes a figure only when that value is already a row.",
             model=settings.ollama_chat_model,
-            system_prompt="You report extracted SQL records. Do not invent rows.",
+            system_prompt="You read SQL rows. On a brief, write a figure only when that value is already a row. Do not invent rows.",
         ),
         Agent(
             slug="clerk",
@@ -322,9 +365,9 @@ def seed_catalog(db: Session) -> None:
             name="Pathfinder",
             role="specialist",
             status="live",
-            summary="GraphRAG retrieve: who is connected to whom, which files mention an entity.",
+            summary="GraphRAG retrieve: who is connected to whom. On a brief, names a project only when that neighbor exists.",
             model=settings.ollama_chat_model,
-            system_prompt="You search the entity graph. Report neighbors and files. Do not guess.",
+            system_prompt="You search the entity graph. Report neighbors and files. On a brief, name a project only when that neighbor exists. Do not guess.",
         ),
         Agent(
             slug="courier",
@@ -360,9 +403,9 @@ def seed_catalog(db: Session) -> None:
             name="Reviewer",
             role="specialist",
             status="live",
-            summary="Human gate: unclassified files, failed ingest, weak invoice rows, and open direction briefs.",
+            summary="Human gate: unclassified files, failed ingest, weak invoice rows, and open direction briefs with the sender.",
             model=settings.ollama_chat_model,
-            system_prompt="You list exceptions that need a person. Do not auto-approve.",
+            system_prompt="You hold exceptions that need a person, including an open brief and who sent it. Do not auto-approve. Do not mark a brief delivered.",
         ),
         Agent(
             slug="architect",
@@ -395,25 +438,25 @@ def seed_catalog(db: Session) -> None:
 
     assignments = {
         "watchman": ["intake.register", "intake.list", "documents.list"],
-        "mailroom": ["intake.poll_mail"],
-        "sentinel": ["signals.scan", "signals.list"],
+        "mailroom": ["intake.poll_mail", "intake.store_letters"],
+        "sentinel": ["signals.judge", "signals.list"],
         "parser": ["documents.parse"],
         "reader": ["documents.read"],
         **{item["slug"]: ["taxonomy.run", "taxonomy.list", "taxonomy.get"] for item in INSTANCES},
         "triage": ["documents.classify"],
         "chunker": ["documents.chunk"],
         "extractor": ["records.extract"],
-        "recorder": ["records.list"],
+        "recorder": ["records.list", "signals.book"],
         "clerk": ["documents.file", "folders.ensure", "folders.list"],
         "ingestor": ["knowledge.ingest", "knowledge.promote", "documents.list"],
         "librarian": ["knowledge.search"],
         "graphsmith": ["knowledge.graph_build"],
-        "pathfinder": ["knowledge.graph_search"],
+        "pathfinder": ["knowledge.graph_search", "signals.graph"],
         "courier": ["telegram.poll", "telegram.send"],
         "teams": ["teams.send"],
         "post": ["mail.send"],
-        "reviewer": ["review.list"],
-        "orchestrator": ["models.list"],
+        "reviewer": ["review.list", "review.hold"],
+        "orchestrator": ["models.list", "signals.scan", "signals.notify"],
         "architect": ["platform.explain"],
         "scribe": ["docs.sync"],
     }
@@ -432,6 +475,7 @@ def seed_catalog(db: Session) -> None:
             )
             if not exists:
                 db.add(AgentTool(agent_id=agent.id, tool_id=tool.id))
+    _unbind_tool(db, "sentinel", "signals.scan")
     _refresh_orchestrator_routes(db)
     _enforce_one_live_taxonomist(db)
     db.commit()
@@ -453,6 +497,14 @@ def _tool(slug: str, name: str, summary: str, entrypoint: str) -> Tool:
         entrypoint=entrypoint,
         config_json="{}",
     )
+
+
+def _unbind_tool(db: Session, agent_slug: str, tool_slug: str) -> None:
+    agent = db.query(Agent).filter(Agent.slug == agent_slug).first()
+    tool = db.query(Tool).filter(Tool.slug == tool_slug).first()
+    if agent is None or tool is None:
+        return
+    db.query(AgentTool).filter(AgentTool.agent_id == agent.id, AgentTool.tool_id == tool.id).delete()
 
 
 def _refresh_orchestrator_routes(db: Session) -> None:

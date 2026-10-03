@@ -15,7 +15,7 @@ The north-star prompt (when an AI session gets lost) is **[AGENTS.md](../AGENTS.
 Scribe keeps the roster below in sync with Postgres. Do not edit inside the markers by hand.
 
 <!-- atrium-roster:start -->
-Intake: Watchman (folder), Mailroom (IMAP), Sentinel (shared inboxes), Courier (Telegram), Teams (webhook, parked), Post (SMTP, parked).
+Intake: Watchman (folder), Mailroom (IMAP), Sentinel (classifies letters), Courier (Telegram), Teams (webhook, parked), Post (SMTP, parked).
 Library: Reader (OCR), E&P Taxonomist (two-level taxonomy). Parked: Advice Taxonomist, Aircraft Taxonomist, Bars Taxonomist, Car Taxonomist, Factory Taxonomist.
 Line: Parser → Triage → Chunker → Graphsmith (entities) → Extractor → Recorder (SQL) → Clerk (classified tree).
 Memory: Pathfinder (GraphRAG retrieve), Librarian (answer with that context).
@@ -72,7 +72,7 @@ LangGraph router  (Orchestrator agent)
         │
         ├── folder / watch      → Watchman    → lists inbox
         ├── email / attachment  → Mailroom    → IMAP download + store the letter
-        ├── shared inbox / churn / riesgo legal → Sentinel → brief for direction
+        ├── shared inbox / churn / riesgo legal → Sentinel → classifies the letter
         ├── parse               → Parser      → PDF / XLSX / PPTX
         ├── ocr / first two pages → Reader
         ├── taxonomy / filing tree  → Taxonomist  → labels class / subclass
@@ -150,15 +150,26 @@ Configure IMAP with `IMAP_HOST`, `IMAP_USER`, `IMAP_PASSWORD` when you want
 Mailroom to pull attachments by itself. Cadence is `hour` / `day` / `week` on
 the live Taxonomist instance (Admin → Utilities, or Workspace Library).
 
-The same fetch stores the letter for **Sentinel** (Admin → Utilities → Operations brief).
-Sentinel is the job for direction, not a personal inbox assistant. It reads shared
-folders (`INBOX`, or `pedidos` / `soporte` once those names are on the mailbox knob),
-flags legal risk, a commercial ask left longer than `stale_hours`, and churn or a
-supplier slip, then looks the party up in Neo4j and in the SQL ledger. It does not
-invent a penalty that those stores did not return. Reviewer keeps the brief open.
-Courier sends it on the Telegram chatbot only when the signal is high and new. The text names the subject and the sender address. The notify knob can point the same brief at Teams or Post once that worker is enabled. Classification
-is a local pattern pass, so a quiet mailbox does not call the 32b model. Set
-Sentinel `poll_seconds` to 300 when it should scan every five minutes. Drop a
+The same fetch stores the letter for the **Brief** room (Workspace → Brief,
+Admin → Utilities → Operations brief). Mailroom saves the letter. Sentinel only
+classifies it as legal, opportunity, or churn and writes the brief with the
+subject and the sender (`De:` name and address). Classification is a local
+pattern pass, so a quiet mailbox does not call the 32b model.
+
+Pathfinder looks the party up in Neo4j and names a project only when that
+neighbor exists. Recorder reads the SQL book and writes a figure such as
+`penalty=10000` only when that value is already a row. Reviewer holds the
+brief, including the sender. A high signal goes to the channel agent on the
+notify knob. Courier (Telegram) is live. Teams and Post stay off until that
+agent is enabled. The message names the subject and the sender. If the chosen
+agent is off, the send does not count and the brief stays open in Reviewer.
+
+Sentinel reads shared folders (`INBOX`, or `pedidos` / `soporte` once those
+names are on the mailbox knob). It does not sweep a personal mailbox. An
+opportunity older than `stale_hours` (default 24) goes high. Signals: unlimited
+liability or a penalty clause; a service request (ISO, expansion); supplier
+delay, cancellation, “third time”, “legal department”. Set Sentinel
+`poll_seconds` to 300 when the line should run every five minutes. Drop a
 JSON letter in `documents/signals-drop/` when IMAP is not configured yet.
 
 ---

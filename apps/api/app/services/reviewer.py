@@ -20,6 +20,13 @@ def list_exceptions(db: Session) -> dict[str, Any]:
         if rec.kind == "invoice" and not payload.get("invoice_number"):
             filename = rec.document.filename if rec.document else ""
             items.append(_item(filename, "weak_invoice", "Invoice row has no invoice_number"))
+    items.extend(hold_signals(db).get("items") or [])
+    return {"ok": True, "count": len(items), "items": items[:40]}
+
+
+def hold_signals(db: Session) -> dict[str, Any]:
+    """Keep open briefs for a person. The sender stays on the exception."""
+    items: list[dict[str, str]] = []
     signals = (
         db.query(OperationalSignal)
         .filter(OperationalSignal.status == "open")
@@ -29,10 +36,10 @@ def list_exceptions(db: Session) -> dict[str, Any]:
     )
     for signal in signals:
         subject = signal.letter.subject if signal.letter else signal.party
-        sender = signal.letter.sender if signal.letter else ""
+        sender = (signal.letter.sender if signal.letter else "") or ""
         detail = f"De: {sender}\n{signal.brief}" if sender else signal.brief
         items.append(_item(subject or signal.party or "signal", f"signal_{signal.kind}", detail))
-    return {"ok": True, "count": len(items), "items": items[:40]}
+    return {"ok": True, "count": len(items), "items": items}
 
 
 def _item(filename: str, reason: str, detail: str) -> dict[str, str]:

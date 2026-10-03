@@ -90,10 +90,13 @@ def test_scan_crosses_graph_and_ledger_without_inventing(monkeypatch) -> None:
         assert "Proyecto X" in brief
         assert "penalty=10000" in brief
         assert "10000" not in brief.replace("penalty=10000", "")
+        assert "Correo 451" in brief
+        assert "De: Acme <ops@acme.test>" in brief
         again = scan(db, [_letter(message_id="delay-451", body="El plazo de entrega se va a retrasar dos semanas.")])
         assert again["created"] == 0
         queued = list_exceptions(db)
-        assert any(item["reason"] == "signal_churn" for item in queued["items"])
+        held = next(item for item in queued["items"] if item["reason"] == "signal_churn")
+        assert "ops@acme.test" in held["detail"]
     finally:
         db.close()
 
@@ -214,6 +217,8 @@ def test_telegram_alarm_names_subject_and_sender_and_other_workers_stay_parked(m
         assert result["notified"] == 1
         assert "Asunto: Correo 451" in sent["text"]
         assert "De: Acme <ops@acme.test>" in sent["text"]
+        assert "Correo 451" in result["signals"][0]["brief"]
+        assert "De: Acme <ops@acme.test>" in result["signals"][0]["brief"]
         assert db.query(Agent).filter(Agent.slug == "teams").one().status == "disabled"
         assert db.query(Agent).filter(Agent.slug == "post").one().status == "disabled"
         _clear(db)
@@ -229,11 +234,91 @@ def test_telegram_alarm_names_subject_and_sender_and_other_workers_stay_parked(m
         assert parked["notified"] == 0
         assert parked["channel"] == "teams"
         assert "parked" in parked["delivery"].lower()
+        open_row = db.query(OperationalSignal).filter(OperationalSignal.status == "open").one()
+        assert open_row.notified == 0
+        queued = list_exceptions(db)
+        assert any(item["reason"] == "signal_churn" and "ops@acme.test" in item["detail"] for item in queued["items"])
         agent = db.query(Agent).filter(Agent.slug == "sentinel").one()
         cfg = json.loads(agent.config_json or "{}")
         cfg["notify"] = "courier"
         agent.config_json = json.dumps(cfg)
         db.commit()
+    finally:
+        db.close()
+
+
+def test_each_oficio_writes_only_its_part(monkeypatch) -> None:
+    class FakeGraph:
+        def entity_search(self, query: str) -> dict:
+            if "Acme" in query:
+                return {
+                    "ok": True,
+                    "enabled": True,
+                    "entities": [{"name": "Acme", "kind": "org", "neighbors": ["Proyecto X"], "files": []}],
+                }
+            return {"ok": True, "enabled": True, "entities": [{"name": query, "kind": "org", "neighbors": [], "files": []}]}
+
+    monkeypatch.setattr("app.services.graphstore.get_graphstore", lambda: FakeGraph())
+    db = SessionLocal()
+    try:
+        _clear(db)
+        doc = IntakeDocument(filename="acme-only.pdf", rel_path=f"acme-only-{datetime.utcnow().timestamp()}.pdf")
+        db.add(doc)
+        db.flush()
+        db.add(
+            ExtractedRecord(
+                document_id=doc.id,
+                kind="contract",
+                payload_json=json.dumps({"vendor": "Acme", "penalty": "10000"}),
+            )
+        )
+        db.commit()
+        stored = invoke_tool(
+            db,
+            "intake.store_letters",
+            {
+                "letters": [
+                    _letter(message_id="hop-acme", subject="Correo 451", body="El plazo de entrega se va a retrasar dos semanas."),
+                    _letter(
+                        message_id="hop-norte",
+                        sender="Norte <buyer@norte.test>",
+                        subject="Aviso",
+                        body="El plazo de entrega se va a retrasar dos semanas.",
+                    ),
+                ]
+            },
+        )
+        assert stored["tool"] == "intake.store_letters"
+        judged = invoke_tool(db, "signals.judge", {})
+        assert judged["tool"] == "signals.judge"
+        assert judged["created"] == 2
+        for item in judged["signals"]:
+            assert "Proyecto X" not in item["brief"]
+            assert "penalty" not in item["brief"]
+            assert item["subject"] in item["brief"]
+            assert item["sender"] in item["brief"]
+        ids = [item["id"] for item in judged["signals"]]
+        invoke_tool(db, "signals.graph", {"ids": ids})
+        invoke_tool(db, "signals.book", {"ids": ids})
+        held = invoke_tool(db, "review.hold", {"ids": ids})
+        briefs = {row.party: row.brief for row in db.query(OperationalSignal).all()}
+        assert "Proyecto X" in briefs["Acme"]
+        assert "penalty=10000" in briefs["Acme"]
+        assert "Proyecto" not in briefs["Norte"]
+        assert "penalty=" not in briefs["Norte"]
+        assert any("buyer@norte.test" in item["detail"] for item in held["items"])
+        agents = {row.slug: {link.tool.slug for link in row.tool_links if link.tool} for row in db.query(Agent).all()}
+        assert agents["sentinel"] == {"signals.judge", "signals.list"}
+        assert "signals.graph" in agents["pathfinder"]
+        assert "signals.book" in agents["recorder"]
+        assert "review.hold" in agents["reviewer"]
+        assert "telegram.send" in agents["courier"]
+        assert "intake.store_letters" in agents["mailroom"]
+        assert "signals.scan" in agents["orchestrator"]
+        assert "signals.notify" in agents["orchestrator"]
+        for slug in ("sentinel", "teams", "post"):
+            cfg = json.loads(db.query(Agent).filter(Agent.slug == slug).one().config_json or "{}")
+            assert cfg.get("roster") is False
     finally:
         db.close()
 
@@ -244,3 +329,6 @@ def test_sentinel_route_does_not_steal_mailroom() -> None:
     assert choose_agent_slug("scan the shared inbox", CANONICAL_ROUTES, available) == "sentinel"
     assert choose_agent_slug("riesgo legal en la bandeja compartida", CANONICAL_ROUTES, available) == "sentinel"
     assert choose_agent_slug("check the mailbox for attachments", CANONICAL_ROUTES, available) == "mailroom"
+    assert choose_agent_slug("party in the graph for this sender", CANONICAL_ROUTES, available) == "pathfinder"
+    assert choose_agent_slug("read the sql book for the penalty", CANONICAL_ROUTES, available) == "recorder"
+    assert choose_agent_slug("hold the brief for a person", CANONICAL_ROUTES, available) == "reviewer"

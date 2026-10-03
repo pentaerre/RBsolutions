@@ -41,10 +41,17 @@ export default function BriefPage() {
     setBusy(true);
     setMessage("");
     try {
-      const payload = await apiSend<SignalPayload>("/tools/signals.scan/invoke", "POST", { payload: {} });
-      setSignals(payload.open || payload.signals || []);
-      if (payload.delivery) {
-        setMessage(payload.delivery);
+      await apiSend("/tools/intake.store_letters/invoke", "POST", { payload: {} });
+      const judged = await apiSend<SignalPayload>("/tools/signals.judge/invoke", "POST", { payload: {} });
+      const ids = (judged.signals || []).map((item) => item.id);
+      await apiSend("/tools/signals.graph/invoke", "POST", { payload: { ids } });
+      await apiSend("/tools/signals.book/invoke", "POST", { payload: { ids } });
+      await apiSend("/tools/review.hold/invoke", "POST", { payload: { ids } });
+      const notified = await apiSend<SignalPayload>("/tools/signals.notify/invoke", "POST", { payload: { ids } });
+      const open = await apiSend<SignalPayload>("/tools/signals.list/invoke", "POST", { payload: {} });
+      setSignals(open.signals || []);
+      if (notified.delivery) {
+        setMessage(notified.delivery);
       }
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("brief.failed"));

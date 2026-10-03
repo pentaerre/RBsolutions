@@ -110,6 +110,19 @@ def _summarize_tool(result: dict) -> str:
             f"Pipeline finished: {result.get('files', 0)} files, "
             f"{result.get('chunks', 0)} chunks, {result.get('records', 0)} SQL rows."
         )
+    if tool == "signals.judge":
+        signals = result.get("signals") or []
+        if not signals:
+            return (
+                f"Sentinel classified {result.get('scanned', 0)} letter(s). "
+                "No new legal, opportunity, or churn brief."
+            )
+        lines = [item.get("brief") or "" for item in signals[:6]]
+        return (
+            f"Sentinel classified {len(signals)} letter(s). "
+            "Pathfinder, Recorder, and Reviewer finish the brief from the Brief room.\n"
+            + "\n\n".join(lines)
+        )
     if tool == "signals.scan":
         signals = result.get("signals") or []
         if not signals:

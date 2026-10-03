@@ -26,7 +26,7 @@ ROSTER_GROUPS: list[tuple[str, list[str], str]] = [
 HINTS = {
     "watchman": "folder",
     "mailroom": "IMAP",
-    "sentinel": "shared inboxes",
+    "sentinel": "classifies letters",
     "courier": "Telegram",
     "teams": "webhook",
     "post": "SMTP",

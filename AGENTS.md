@@ -41,7 +41,7 @@ Reuse an existing oficio if the job already belongs to them. Split a new agent o
 ## Current specialist roster
 
 <!-- atrium-roster:start -->
-Intake: Watchman (folder), Mailroom (IMAP), Sentinel (shared inboxes), Courier (Telegram), Teams (webhook, parked), Post (SMTP, parked).
+Intake: Watchman (folder), Mailroom (IMAP), Sentinel (classifies letters), Courier (Telegram), Teams (webhook, parked), Post (SMTP, parked).
 Library: Reader (OCR), E&P Taxonomist (two-level taxonomy). Parked: Advice Taxonomist, Aircraft Taxonomist, Bars Taxonomist, Car Taxonomist, Factory Taxonomist.
 Line: Parser → Triage → Chunker → Graphsmith (entities) → Extractor → Recorder (SQL) → Clerk (classified tree).
 Memory: Pathfinder (GraphRAG retrieve), Librarian (answer with that context).
