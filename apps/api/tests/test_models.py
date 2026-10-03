@@ -18,6 +18,7 @@ def test_normalize_models_keeps_every_installed_name() -> None:
 def test_pick_default_falls_back_to_first_installed() -> None:
     assert pick_default_model(["llama3.1:8b", "qwen2.5-coder:32b"], "missing") == "llama3.1:8b"
     assert pick_default_model(["llama3.1:8b", "qwen2.5-coder:32b"], "qwen2.5-coder:32b") == "qwen2.5-coder:32b"
+    assert pick_default_model(["qwen2.5-coder:32b", "qwen2.5:7b"], "qwen2.5:7b") == "qwen2.5:7b"
 
 
 def test_models_endpoint_lists_all_installed(client) -> None:

@@ -68,10 +68,11 @@ class Orchestrator:
             }
         )
         yield ":" + (" " * 1024) + "\n\n"
-        prompt = _librarian_prompt(self._db)
-        messages = build_messages(message, hits, system_prompt=prompt)
         chosen = model or _agent_model(self._db, final.get("route")) or settings.ollama_chat_model
         yield sse({"type": "model", "name": chosen})
+        yield ":" + (" " * 1024) + "\n\n"
+        prompt = _librarian_prompt(self._db)
+        messages = build_messages(message, hits[:3], system_prompt=prompt)
         try:
             async for token in stream_llm(messages, chosen):
                 yield sse({"type": "token", "content": token})
@@ -109,6 +110,40 @@ def _summarize_tool(result: dict) -> str:
             f"Pipeline finished: {result.get('files', 0)} files, "
             f"{result.get('chunks', 0)} chunks, {result.get('records', 0)} SQL rows."
         )
+    if tool == "signals.judge":
+        signals = result.get("signals") or []
+        if not signals:
+            return (
+                f"Sentinel classified {result.get('scanned', 0)} letter(s). "
+                "No new legal, opportunity, or churn brief."
+            )
+        lines = [item.get("brief") or "" for item in signals[:6]]
+        return (
+            f"Sentinel classified {len(signals)} letter(s). "
+            "Pathfinder, Recorder, and Reviewer finish the brief from the Brief room.\n"
+            + "\n\n".join(lines)
+        )
+    if tool == "signals.scan":
+        signals = result.get("signals") or []
+        if not signals:
+            return (
+                f"Sentinel scanned {result.get('scanned', 0)} letter(s). "
+                "No new legal, opportunity, or churn brief."
+            )
+        from app.services.channels import alarm_text
+
+        lines = [alarm_text(item) for item in signals[:6]]
+        channel = result.get("channel") or "courier"
+        if result.get("notified"):
+            notified = f"Delivered {result.get('notified')} high brief(s) via {channel}."
+        else:
+            notified = str(result.get("delivery") or f"No delivery on {channel}.")
+        return f"Sentinel wrote {len(signals)} brief(s). {notified}\n" + "\n\n".join(lines)
+    if tool == "signals.list":
+        signals = result.get("signals") or []
+        if not signals:
+            return "No open briefs. Shared-inbox letters have not raised a signal."
+        return f"{len(signals)} open brief(s):\n" + "\n".join(item.get("brief") or "" for item in signals[:8])
     if tool == "intake.poll_mail":
         if not result.get("configured"):
             return str(result.get("message") or "Mailroom is not configured.")

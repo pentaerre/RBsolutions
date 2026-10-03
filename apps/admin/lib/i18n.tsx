@@ -117,16 +117,25 @@ export function LanguageSelect() {
   );
 }
 
-export function CrossAppLink({ port, children }: { port: number; children: React.ReactNode }) {
+export function CrossAppLink({
+  port,
+  path = "",
+  children,
+}: {
+  port: number;
+  path?: string;
+  children: React.ReactNode;
+}) {
+  const suffix = path.startsWith("/") || path === "" ? path : `/${path}`;
   return (
     <a
-      href={`http://localhost:${port}`}
+      href={`http://localhost:${port}${suffix}`}
       onClick={(event) => {
         if (typeof window === "undefined") {
           return;
         }
         event.preventDefault();
-        window.location.href = `${window.location.protocol}//${window.location.hostname}:${port}`;
+        window.location.href = `${window.location.protocol}//${window.location.hostname}:${port}${suffix}`;
       }}
     >
       {children}

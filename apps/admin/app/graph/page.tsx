@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { apiGet } from "@/lib/api";
-import { useI18n } from "@/lib/i18n";
+import { apiGet, apiSend } from "@/lib/api";
+import { CrossAppLink, useI18n } from "@/lib/i18n";
 import { localizeGraphPayload } from "@/lib/graph-i18n";
 
 type GraphNode = {
@@ -12,9 +12,29 @@ type GraphNode = {
   detail?: string;
   layer?: number;
   row?: number;
+  count?: number;
+  hot?: boolean;
+  model?: string;
 };
 type GraphEdge = { from: string; to: string; label?: string };
 type GraphData = { nodes: GraphNode[]; edges: GraphEdge[] };
+type FlowHop = {
+  id: string;
+  agent: string;
+  status: string;
+  label: string;
+  summary: string;
+  count: number;
+  model?: string;
+  files: { id: string; filename: string; rel_path: string; status: string; taxonomy_l1?: string; taxonomy_l2?: string }[];
+};
+type FlowPayload = {
+  hops: FlowHop[];
+  counts: Record<string, number>;
+  total: number;
+  line: GraphData;
+  documents: FlowHop["files"];
+};
 type GraphPayload = {
   architecture: GraphData;
   detail: GraphData;
@@ -25,41 +45,72 @@ type GraphPayload = {
   knowledge: GraphData;
   explain: string;
   stores: Record<string, string>;
+  flow?: FlowPayload;
 };
 
-type ViewId = "architecture" | "detail" | "rag";
+type ViewId = "architecture" | "flow" | "rag";
 
 const VIEW_KEYS: { id: ViewId; title: string; help: string }[] = [
   { id: "architecture", title: "graph.architecture", help: "graph.architectureHelp" },
-  { id: "detail", title: "graph.detail", help: "graph.detailHelp" },
+  { id: "flow", title: "graph.flow", help: "graph.flowHelp" },
   { id: "rag", title: "graph.rag", help: "graph.ragHelp" },
 ];
 
-const KINDS: Record<string, { fill: string; label: string }> = {
-  start: { fill: "#2a333d", label: "start" },
-  router: { fill: "#3d4d3a", label: "router" },
-  agent: { fill: "#3a3348", label: "agent" },
-  tool: { fill: "#3d3a2a", label: "tool" },
-  app: { fill: "#2a3a48", label: "app" },
-  store: { fill: "#2a3330", label: "store" },
-  entity: { fill: "#3a4030", label: "entity" },
-  document: { fill: "#3a2e2a", label: "document" },
-  chunk: { fill: "#2a2e2a", label: "chunk" },
+const KINDS: Record<string, { fill: string; stroke: string; text: string }> = {
+  start: { fill: "#38bdf8", stroke: "#7dd3fc", text: "#082028" },
+  router: { fill: "#f5a524", stroke: "#fcd34d", text: "#1a1408" },
+  agent: { fill: "#a78bfa", stroke: "#ddd6fe", text: "#1a1028" },
+  tool: { fill: "#fb923c", stroke: "#fdba74", text: "#1a1008" },
+  app: { fill: "#22d3ee", stroke: "#67e8f9", text: "#082028" },
+  store: { fill: "#34d399", stroke: "#6ee7b7", text: "#062018" },
+  entity: { fill: "#facc15", stroke: "#fde047", text: "#1a1608" },
+  document: { fill: "#f472b6", stroke: "#f9a8d4", text: "#1a0814" },
+  chunk: { fill: "#64748b", stroke: "#94a3b8", text: "#f8fafc" },
+};
+
+const HOP_KIND: Record<string, string> = {
+  watchman: "start",
+  reader: "agent",
+  taxonomist: "agent",
+  clerk: "agent",
+  chunker: "store",
+  reviewer: "tool",
 };
 
 export default function GraphPage() {
   const { t, locale } = useI18n();
   const [data, setData] = useState<GraphPayload | null>(null);
+  const [flow, setFlow] = useState<FlowPayload | null>(null);
   const [view, setView] = useState<ViewId>("architecture");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     apiGet<GraphPayload>("/graph")
-      .then(setData)
+      .then((payload) => {
+        setData(payload);
+        if (payload.flow) {
+          setFlow(payload.flow);
+        }
+      })
       .catch((err: Error) => setError(err.message))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (view !== "flow") {
+      return;
+    }
+    const tick = () => {
+      apiGet<FlowPayload>("/flow?taxonomist=taxonomist")
+        .then(setFlow)
+        .catch(() => undefined);
+    };
+    tick();
+    const id = window.setInterval(tick, 4000);
+    return () => window.clearInterval(id);
+  }, [view]);
 
   const picture = useMemo(() => (data ? localizeGraphPayload(data, locale) : null), [data, locale]);
 
@@ -70,12 +121,12 @@ export default function GraphPage() {
     const graphs =
       view === "architecture"
         ? [picture.architecture]
-        : view === "detail"
-          ? [picture.detail, picture.runtime]
+        : view === "flow"
+          ? [flow?.line || picture.pipeline]
           : [picture.rag.method, picture.rag.knowledge];
     const present = new Set(graphs.flatMap((graph) => graph.nodes.map((node) => node.kind)));
     return Object.keys(KINDS).filter((kind) => present.has(kind));
-  }, [picture, view]);
+  }, [picture, view, flow]);
 
   return (
     <>
@@ -84,6 +135,32 @@ export default function GraphPage() {
           <h1>{t("graph.title")}</h1>
           <p>{t("graph.lead")}</p>
         </div>
+        {view === "flow" ? (
+          <div className="actions">
+            <CrossAppLink port={3000} path="/library?taxonomist=taxonomist">
+              {t("graph.openLibrary")}
+            </CrossAppLink>
+            <button
+              className="btn"
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await apiSend("/library/run?taxonomist=taxonomist", "POST");
+                  const next = await apiGet<FlowPayload>("/flow?taxonomist=taxonomist");
+                  setFlow(next);
+                } catch (err) {
+                  setError(err instanceof Error ? err.message : t("graph.runFailed"));
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              {busy ? t("graph.running") : t("graph.runLine")}
+            </button>
+          </div>
+        ) : null}
       </div>
       {error ? <p className="warn">{error}</p> : null}
       <div className="tabs">
@@ -104,15 +181,8 @@ export default function GraphPage() {
         <p className="muted">{t("graph.loading")}</p>
       ) : view === "architecture" ? (
         <GraphCanvas nodes={picture.architecture.nodes} edges={picture.architecture.edges} markerId="arch" />
-      ) : view === "detail" ? (
-        <>
-          <GraphSection title={t("graph.line")}>
-            <GraphCanvas nodes={picture.detail.nodes} edges={picture.detail.edges} markerId="detail" />
-          </GraphSection>
-          <GraphSection title={t("graph.chat")}>
-            <GraphCanvas nodes={picture.runtime.nodes} edges={picture.runtime.edges} markerId="runtime" />
-          </GraphSection>
-        </>
+      ) : view === "flow" ? (
+        <FlowBoard flow={flow} t={t} />
       ) : (
         <>
           <GraphSection title={t("graph.method")}>
@@ -124,16 +194,25 @@ export default function GraphPage() {
         </>
       )}
       <div className="graph-legend">
-        {legendKinds.map((kind) => (
-          <span key={kind}>
+        {legendKinds.map((kind) => {
+          const color = KINDS[kind];
+          return (
             <span
-              style={{ display: "inline-block", width: 10, height: 10, background: KINDS[kind].fill, marginRight: 6 }}
-            />
-            {t(`kind.${kind}`)}
-          </span>
-        ))}
+              key={kind}
+              className="legend-chip"
+              style={{
+                background: color.fill,
+                color: color.text,
+                borderColor: color.stroke,
+              }}
+            >
+              <span className="legend-swatch" style={{ background: color.fill, boxShadow: `0 0 0 2px ${color.stroke}` }} />
+              {t(`kind.${kind}`)}
+            </span>
+          );
+        })}
       </div>
-      {picture ? (
+      {picture && view !== "flow" ? (
         <div className="card" style={{ marginTop: 20 }}>
           <h2>{t("graph.stores")}</h2>
           <p className="muted">
@@ -143,9 +222,84 @@ export default function GraphPage() {
               neo4j: picture.stores.neo4j,
             })}
           </p>
-          <pre className="explain">{picture.explain}</pre>
+          <details>
+            <summary>{t("graph.catalog")}</summary>
+            <pre className="explain">{picture.explain}</pre>
+          </details>
         </div>
       ) : null}
+    </>
+  );
+}
+
+function FlowBoard({
+  flow,
+  t,
+}: {
+  flow: FlowPayload | null;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  if (!flow) {
+    return <p className="muted">{t("graph.loading")}</p>;
+  }
+  return (
+    <>
+      <div className="hop-row">
+        {flow.hops.map((hop) => (
+          <article
+            className={`card hop${hop.count ? " hot" : ""}`}
+            key={hop.id}
+            style={{ borderTop: `4px solid ${(KINDS[HOP_KIND[hop.id] || "agent"] || KINDS.agent).fill}` }}
+          >
+            <div className="chip-row">
+              <p className="muted" style={{ margin: 0 }}>{t(`flow.agent.${hop.id}`)}</p>
+              {hop.model ? <span className="badge model">{hop.model.replace(/:latest$/, "")}</span> : null}
+            </div>
+            <h2>{hop.count}</h2>
+            <p>{t(`flow.hop.${hop.id}`)}</p>
+            {hop.files.slice(0, 3).map((file) => (
+              <p className="muted hop-file" key={file.id}>
+                {file.filename}
+              </p>
+            ))}
+          </article>
+        ))}
+      </div>
+      <GraphSection title={t("graph.flowLine")}>
+        <GraphCanvas nodes={flow.line.nodes} edges={flow.line.edges} markerId="flow-line" />
+      </GraphSection>
+      <div className="card" style={{ maxWidth: "none" }}>
+        <h2>{t("graph.files", { count: flow.total })}</h2>
+        <table className="table">
+          <thead>
+            <tr>
+              <th>{t("graph.colFile")}</th>
+              <th>{t("graph.colHop")}</th>
+              <th>{t("graph.colClass")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {flow.documents.length === 0 ? (
+              <tr>
+                <td colSpan={3} className="muted">
+                  {t("graph.noFiles")}
+                </td>
+              </tr>
+            ) : (
+              flow.documents.map((doc) => (
+                <tr key={doc.id}>
+                  <td>
+                    {doc.filename}
+                    <div className="muted">{doc.rel_path}</div>
+                  </td>
+                  <td>{t(`flow.status.${doc.status}`) === `flow.status.${doc.status}` ? doc.status : t(`flow.status.${doc.status}`)}</td>
+                  <td>{doc.taxonomy_l1 ? `${doc.taxonomy_l1} / ${doc.taxonomy_l2}` : "—"}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
     </>
   );
 }
@@ -191,7 +345,7 @@ function GraphCanvas({
       <svg className="graph-canvas" viewBox={`0 0 ${width} ${height}`} width={width} height={height}>
         <defs>
           <marker id={markerId} markerWidth="8" markerHeight="8" refX="7" refY="3" orient="auto">
-            <path d="M0,0 L8,3 L0,6 z" fill="#5e7191" />
+            <path d="M0,0 L8,3 L0,6 z" fill="var(--accent)" />
           </marker>
         </defs>
         {edges.map((edge) => {
@@ -210,12 +364,12 @@ function GraphCanvas({
                 y1={points.y1}
                 x2={points.x2}
                 y2={points.y2}
-                stroke="#5e7191"
-                strokeWidth="1.2"
+                stroke="var(--line-strong)"
+                strokeWidth="1.6"
                 markerEnd={`url(#${markerId})`}
               />
               {edge.label ? (
-                <text x={labelX} y={labelY} fill="#8b98a5" fontSize="10" textAnchor="middle">
+                <text x={labelX} y={labelY} fill="var(--text)" fontSize="10" textAnchor="middle">
                   {edge.label}
                 </text>
               ) : null}
@@ -227,15 +381,30 @@ function GraphCanvas({
           if (!pos) {
             return null;
           }
-          const fill = KINDS[node.kind]?.fill || "#2a333d";
+          const palette = KINDS[node.kind] || KINDS.agent;
+          const stroke = node.hot ? "var(--text)" : palette.stroke;
+          const subtitle = node.count != null
+            ? String(node.count)
+            : node.model
+              ? node.model.replace(/:latest$/, "")
+              : truncate(node.detail || t(`kind.${node.kind}`), 28);
           return (
             <g key={node.id}>
-              <rect x={pos.x} y={pos.y} width={NODE_W} height={NODE_H} rx="10" fill={fill} stroke="#5e7191" />
-              <text x={pos.x + NODE_W / 2} y={pos.y + 24} fill="#e6edf3" fontSize="12" textAnchor="middle">
-                {node.label}
+              <rect
+                x={pos.x}
+                y={pos.y}
+                width={NODE_W}
+                height={NODE_H}
+                rx="10"
+                fill={palette.fill}
+                stroke={stroke}
+                strokeWidth={node.hot ? 3 : 1.5}
+              />
+              <text x={pos.x + NODE_W / 2} y={pos.y + 24} fill={palette.text} fontSize="12" fontWeight="700" textAnchor="middle">
+                {truncate(node.label, 22)}
               </text>
-              <text x={pos.x + NODE_W / 2} y={pos.y + 42} fill="#8b98a5" fontSize="10" textAnchor="middle">
-                {truncate(node.detail || t(`kind.${node.kind}`), 28)}
+              <text x={pos.x + NODE_W / 2} y={pos.y + 42} fill={palette.text} fontSize="10" textAnchor="middle" opacity={0.85}>
+                {subtitle}
               </text>
             </g>
           );

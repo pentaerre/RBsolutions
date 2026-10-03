@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     app_name: str = "Atrium"
     api_prefix: str = "/api"
     ollama_base_url: str = "http://127.0.0.1:11434"
-    ollama_chat_model: str = "qwen2.5-coder:32b"
+    ollama_chat_model: str = "qwen2.5:7b"
     ollama_embed_model: str = ""
     documents_dir: str = "/data/documents"
     qdrant_url: str = "memory"
@@ -35,8 +35,18 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     telegram_poll_seconds: int = 0
+    teams_webhook_url: str = ""
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_to: str = ""
     docs_root: str = ""
     sync_docs: bool = True
+    taxonomy_cadence: str = "hour"
+    extract_with_llm: bool = True
+    file_llm: bool = True
 
     @property
     def cors_origin_list(self) -> list[str]:

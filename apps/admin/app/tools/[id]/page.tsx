@@ -1,8 +1,11 @@
 "use client";
 
 import { FormEvent, useEffect, useState } from "react";
+import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { apiGet, apiSend, type ToolItem } from "@/lib/api";
+import { apiGet, apiSend, type AgentItem, type ToolItem } from "@/lib/api";
+import { KnobFields, setNested } from "@/components/knob-fields";
+import { ModelChip } from "@/components/model-chip";
 import { useI18n } from "@/lib/i18n";
 
 export default function ToolDetailPage() {
@@ -10,14 +13,16 @@ export default function ToolDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const [tool, setTool] = useState<ToolItem | null>(null);
+  const [agents, setAgents] = useState<AgentItem[]>([]);
   const [config, setConfig] = useState("{}");
   const [message, setMessage] = useState("");
 
   useEffect(() => {
-    apiGet<{ tools: ToolItem[] }>("/tools")
-      .then((payload) => {
+    Promise.all([apiGet<{ tools: ToolItem[] }>("/tools"), apiGet<{ agents: AgentItem[] }>("/agents")])
+      .then(([payload, catalog]) => {
         const found = payload.tools.find((item) => item.id === params.id) || null;
         setTool(found);
+        setAgents(catalog.agents);
         setConfig(JSON.stringify(found?.config || {}, null, 2));
       })
       .catch((err: Error) => setMessage(err.message));
@@ -31,6 +36,9 @@ export default function ToolDetailPage() {
     setMessage("");
     try {
       const parsed = JSON.parse(config);
+      for (const field of tool.knobs || []) {
+        setNested(parsed, field.key, field.value);
+      }
       const saved = await apiSend<ToolItem>(`/tools/${tool.id}`, "PATCH", {
         name: tool.name,
         status: tool.status,
@@ -40,6 +48,7 @@ export default function ToolDetailPage() {
         config: parsed,
       });
       setTool(saved);
+      setConfig(JSON.stringify(saved.config || {}, null, 2));
       setMessage(t("tools.saved"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("tools.saveFailed"));
@@ -49,6 +58,8 @@ export default function ToolDetailPage() {
   if (!tool) {
     return <p className="muted">{message || t("tools.loading")}</p>;
   }
+
+  const linked = agents.filter((agent) => tool.agents.includes(agent.slug));
 
   return (
     <>
@@ -90,10 +101,49 @@ export default function ToolDetailPage() {
           {t("tools.summary")}
           <textarea value={tool.summary} onChange={(e) => setTool({ ...tool, summary: e.target.value })} />
         </label>
-        <label>
-          {t("tools.config")}
+        <div>
+          <div className="muted" style={{ marginBottom: 8 }}>
+            {t("tools.agents")}
+          </div>
+          {linked.length ? (
+            <div className="chip-row" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+              {linked.map((agent) => (
+                <p key={agent.id} className="chip-row" style={{ margin: 0 }}>
+                  <Link href={`/agents/${agent.id}`}>{agent.name}</Link>
+                  {agent.uses_llm ? <ModelChip value={agent.model} models={[]} label={t("agents.model")} /> : null}
+                </p>
+              ))}
+            </div>
+          ) : (
+            <p className="muted">{t("tools.noAgents")}</p>
+          )}
+        </div>
+        {(tool.knobs || []).length ? (
+          <div>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              {t("knobs.title")}
+            </div>
+            <KnobFields
+              knobs={tool.knobs || []}
+              onChange={(key, value) => {
+                const nextKnobs = (tool.knobs || []).map((field) => (field.key === key ? { ...field, value } : field));
+                let parsed: Record<string, unknown> = {};
+                try {
+                  parsed = JSON.parse(config);
+                } catch {
+                  parsed = { ...(tool.config || {}) };
+                }
+                setNested(parsed, key, value);
+                setTool({ ...tool, knobs: nextKnobs, config: parsed });
+                setConfig(JSON.stringify(parsed, null, 2));
+              }}
+            />
+          </div>
+        ) : null}
+        <details>
+          <summary>{t("tools.config")}</summary>
           <textarea value={config} onChange={(e) => setConfig(e.target.value)} />
-        </label>
+        </details>
         <button className="btn" type="submit">
           {t("tools.save")}
         </button>

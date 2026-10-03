@@ -3,11 +3,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from app.config import settings
 from app.services.classify import STRUCTURED_TYPES
 
 
-def extract_records(doc_type: str, parsed: dict[str, Any], filename: str) -> list[dict[str, Any]]:
+def extract_records(
+    doc_type: str, parsed: dict[str, Any], filename: str, model: str | None = None
+) -> list[dict[str, Any]]:
     if doc_type not in STRUCTURED_TYPES and not parsed.get("tables"):
         return []
     if parsed.get("tables"):
@@ -22,12 +23,15 @@ def extract_records(doc_type: str, parsed: dict[str, Any], filename: str) -> lis
                 )
         if records:
             return records[:200]
-    payload = _heuristic_invoice(parsed.get("text") or "", filename) if doc_type == "invoice" else {
+    text = parsed.get("text") or ""
+    heuristic = _heuristic_invoice(text, filename) if doc_type == "invoice" else {
         "filename": filename,
-        "summary": (parsed.get("text") or "")[:800],
+        "summary": text[:800],
     }
-    if settings.extract_with_llm:
-        payload = {**payload, **_llm_fields(parsed.get("text") or "", filename, doc_type)}
+    payload = {**heuristic}
+    for key, value in _llm_fields(text, filename, doc_type, model=model).items():
+        if value not in (None, "", [], {}):
+            payload[key] = value
     return [{"kind": doc_type or "document", "payload": payload}]
 
 
@@ -49,7 +53,7 @@ def _first(pattern: str, text: str) -> str:
     return match.group(1).strip() if match else ""
 
 
-def _llm_fields(text: str, filename: str, doc_type: str) -> dict[str, Any]:
+def _llm_fields(text: str, filename: str, doc_type: str, model: str | None = None) -> dict[str, Any]:
     from app.services.llm import complete_json
 
     prompt = (
@@ -58,6 +62,7 @@ def _llm_fields(text: str, filename: str, doc_type: str) -> dict[str, Any]:
         f"{text[:6000]}"
     )
     try:
-        return complete_json(prompt)
+        data = complete_json(prompt, model=model)
     except Exception:
         return {}
+    return data if isinstance(data, dict) else {}

@@ -38,16 +38,16 @@ export type AppItem = {
   summary: string;
 };
 
-export type ToolItem = {
-  id: string;
-  slug: string;
-  name: string;
-  kind: string;
-  status: string;
-  summary: string;
-  entrypoint: string;
-  config: Record<string, unknown>;
-  agents: string[];
+export type KnobOption = { value: string; label_key: string };
+
+export type KnobField = {
+  key: string;
+  type: "string" | "number" | "bool" | "select";
+  default?: string | number | boolean;
+  label_key: string;
+  help_key?: string;
+  options?: KnobOption[];
+  value?: string | number | boolean;
 };
 
 export type AgentItem = {
@@ -58,7 +58,31 @@ export type AgentItem = {
   status: string;
   summary: string;
   model: string;
+  uses_llm?: boolean;
   system_prompt: string;
   config: Record<string, unknown>;
   tools: string[];
+  knobs?: KnobField[];
+};
+
+export type ToolItem = {
+  id: string;
+  slug: string;
+  name: string;
+  kind: string;
+  status: string;
+  summary: string;
+  entrypoint: string;
+  config: Record<string, unknown>;
+  agents: string[];
+  knobs?: KnobField[];
+};
+
+export type UtilityItem = {
+  slug: string;
+  name: string;
+  summary: string;
+  workspace_path: string;
+  workspace_url: string;
+  agents: AgentItem[];
 };

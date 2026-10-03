@@ -104,6 +104,7 @@ class OllamaClient:
             "model": model or self._default_model,
             "messages": messages,
             "stream": True,
+            "options": {"num_predict": 220, "num_ctx": 2048, "temperature": 0.2},
         }
         timeout = httpx.Timeout(600.0, connect=5.0)
         async with httpx.AsyncClient(timeout=timeout) as client:

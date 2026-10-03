@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Optional
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -74,18 +75,32 @@ class IntakeDocument(Base):
     __tablename__ = "intake_documents"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
-    filename: Mapped[str] = mapped_column(String(260), unique=True, index=True)
-    source: Mapped[str] = mapped_column(String(40), default="folder")  # folder | email
+    filename: Mapped[str] = mapped_column(String(260), index=True)
+    rel_path: Mapped[str] = mapped_column(String(512), unique=True, index=True, default="")
+    abs_path: Mapped[str] = mapped_column(String(800), default="")
+    source: Mapped[str] = mapped_column(String(40), default="folder")  # folder | email | telegram
     source_ref: Mapped[str] = mapped_column(String(300), default="")
     suffix: Mapped[str] = mapped_column(String(20), default="")
     doc_type: Mapped[str] = mapped_column(String(40), default="unknown")
+    taxonomy_l1: Mapped[str] = mapped_column(String(80), default="")
+    taxonomy_l2: Mapped[str] = mapped_column(String(80), default="")
+    taxonomist_slug: Mapped[str] = mapped_column(String(80), default="")
     status: Mapped[str] = mapped_column(String(20), default="received")
     pages: Mapped[int] = mapped_column(Integer, default=0)
+    read_pages: Mapped[int] = mapped_column(Integer, default=0)
     chunks: Mapped[int] = mapped_column(Integer, default=0)
     records: Mapped[int] = mapped_column(Integer, default=0)
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    ocr_used: Mapped[int] = mapped_column(Integer, default=0)
+    rag_selected: Mapped[int] = mapped_column(Integer, default=0)
+    summary: Mapped[str] = mapped_column(Text, default="")
+    keywords: Mapped[str] = mapped_column(Text, default="[]")
     text_preview: Mapped[str] = mapped_column(Text, default="")
     classified_path: Mapped[str] = mapped_column(String(400), default="")
+    classify_method: Mapped[str] = mapped_column(String(20), default="")
+    classify_note: Mapped[str] = mapped_column(String(160), default="")
     error: Mapped[str] = mapped_column(Text, default="")
+    file_created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     extractions: Mapped[list[ExtractedRecord]] = relationship(back_populates="document", cascade="all, delete-orphan")
@@ -100,3 +115,40 @@ class ExtractedRecord(Base):
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     document: Mapped[IntakeDocument] = relationship(back_populates="extractions")
+
+
+class MailboxLetter(Base):
+    """One shared-inbox letter. Mailroom stores it; Sentinel judges it."""
+
+    __tablename__ = "mailbox_letters"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    message_key: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    mailbox: Mapped[str] = mapped_column(String(120), default="INBOX")
+    sender: Mapped[str] = mapped_column(String(300), default="")
+    subject: Mapped[str] = mapped_column(String(400), default="")
+    body: Mapped[str] = mapped_column(Text, default="")
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    scanned: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    signals: Mapped[list["OperationalSignal"]] = relationship(back_populates="letter", cascade="all, delete-orphan")
+
+
+class OperationalSignal(Base):
+    """A brief for direction: legal risk, opportunity, or churn. Not a personal reply."""
+
+    __tablename__ = "operational_signals"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    letter_id: Mapped[str] = mapped_column(ForeignKey("mailbox_letters.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(40), default="")  # legal | opportunity | churn
+    severity: Mapped[str] = mapped_column(String(20), default="medium")
+    party: Mapped[str] = mapped_column(String(160), default="")
+    evidence: Mapped[str] = mapped_column(String(200), default="")
+    brief: Mapped[str] = mapped_column(Text, default="")
+    graph_json: Mapped[str] = mapped_column(Text, default="{}")
+    ledger_json: Mapped[str] = mapped_column(Text, default="[]")
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    notified: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    letter: Mapped[MailboxLetter] = relationship(back_populates="signals")

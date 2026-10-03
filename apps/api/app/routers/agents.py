@@ -7,6 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.db.models import Agent, AgentTool, Tool
 from app.db.serialize import agent_to_dict
 from app.db.session import get_db
+from app.services.llm_agents import assigned_model
+from app.services.taxonomy import exclusive_live, is_taxonomist
 
 router = APIRouter()
 
@@ -43,10 +45,14 @@ def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_
     data = payload.model_dump(exclude_unset=True)
     tool_slugs = data.pop("tools", None)
     config = data.pop("config", None)
+    if "model" in data:
+        data["model"] = assigned_model(row.slug, data["model"])
     for key, value in data.items():
         setattr(row, key, value)
     if config is not None:
         row.config_json = json.dumps(config)
+    if row.status == "live" and is_taxonomist(row.slug):
+        exclusive_live(db, row.slug)
     if tool_slugs is not None:
         db.query(AgentTool).filter(AgentTool.agent_id == row.id).delete()
         for slug in tool_slugs:
@@ -56,7 +62,9 @@ def update_agent(agent_id: str, payload: AgentUpdate, db: Session = Depends(get_
             db.add(AgentTool(agent_id=row.id, tool_id=tool.id))
     db.commit()
     db.refresh(row)
+    from app.services.knobs import touch_runtime
     from app.services.scribe import try_sync_docs
 
+    touch_runtime(row.slug)
     try_sync_docs(db)
     return agent_to_dict(row)

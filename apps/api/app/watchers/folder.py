@@ -5,23 +5,25 @@ from pathlib import Path
 from watchdog.events import FileSystemEvent, FileSystemEventHandler
 from watchdog.observers import Observer
 
-from app.config import Settings
-from app.services.ingest import IngestService
+from app.config import Settings, settings
+from app.db.session import SessionLocal
+from app.services import library, pipeline
 from app.services.parsers import SUPPORTED_SUFFIXES
+
+_observer: Observer | None = None
 
 
 class DocumentHandler(FileSystemEventHandler):
-    def __init__(self, ingest: IngestService, root: Path) -> None:
-        self._ingest = ingest
+    def __init__(self, root: Path) -> None:
         self._root = root
 
     def on_created(self, event: FileSystemEvent) -> None:
-        self._maybe_ingest(event)
+        self._maybe_register(event)
 
     def on_modified(self, event: FileSystemEvent) -> None:
-        self._maybe_ingest(event)
+        self._maybe_register(event)
 
-    def _maybe_ingest(self, event: FileSystemEvent) -> None:
+    def _maybe_register(self, event: FileSystemEvent) -> None:
         if event.is_directory:
             return
         path = Path(str(event.src_path))
@@ -29,23 +31,47 @@ class DocumentHandler(FileSystemEventHandler):
             return
         if path.name.lower() in {"readme.md"}:
             return
-        classified = self._root / "classified"
-        try:
-            path.relative_to(classified)
+        if pipeline._is_classified(path, Path(settings.documents_dir)):
             return
-        except ValueError:
-            pass
-        self._ingest.ingest_file(path)
+        db = SessionLocal()
+        try:
+            library.register_path(db, path, source="folder")
+            db.commit()
+        except Exception:
+            db.rollback()
+        finally:
+            db.close()
 
 
-def start_folder_watcher(settings: Settings, ingest: IngestService) -> Observer:
-    root = Path(settings.documents_dir)
-    inbox = root / "inbox"
-    inbox.mkdir(parents=True, exist_ok=True)
+def start_folder_watcher(app_settings: Settings | None = None) -> Observer | None:
+    global _observer
+    cfg = app_settings or settings
+    if not cfg.watch_documents:
+        return None
+    from app.services.knobs import watch_recursive, watch_root
+
+    folder = watch_root()
+    folder.mkdir(parents=True, exist_ok=True)
+    stop_folder_watcher()
     observer = Observer()
-    handler = DocumentHandler(ingest, root)
-    observer.schedule(handler, str(root), recursive=False)
-    observer.schedule(handler, str(inbox), recursive=False)
+    handler = DocumentHandler(Path(cfg.documents_dir))
+    observer.schedule(handler, str(folder), recursive=watch_recursive())
     observer.daemon = True
     observer.start()
+    _observer = observer
     return observer
+
+
+def stop_folder_watcher() -> None:
+    global _observer
+    if _observer is None:
+        return
+    _observer.stop()
+    _observer.join(timeout=2)
+    _observer = None
+
+
+def restart_folder_watcher() -> None:
+    if not settings.watch_documents:
+        return
+    start_folder_watcher(settings)

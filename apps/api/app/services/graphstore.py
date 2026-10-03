@@ -117,7 +117,19 @@ class GraphStore:
 
     def rebuild_from_chunks(self, filename: str, pages: int, chunks: list[str]) -> dict[str, int]:
         self.upsert_document(filename, pages, chunks)
-        extracted = extract_graph("\n".join(chunks), filename)
+        model = None
+        try:
+            from app.db.session import SessionLocal
+            from app.services.llm_agents import catalog_chat_model
+
+            db = SessionLocal()
+            try:
+                model = catalog_chat_model(db, "graphsmith")
+            finally:
+                db.close()
+        except Exception:
+            model = None
+        extracted = extract_graph("\n".join(chunks)[:8000], filename, use_llm=True, model=model)
         return {"entities": len(extracted["entities"]), "relations": len(extracted["relations"])}
 
     def knowledge_graph(self) -> dict[str, list]:
@@ -157,85 +169,90 @@ def _write_document(tx, filename: str, pages: int, chunks: list[dict[str, Any]])
 
 
 def _read_knowledge(tx) -> dict[str, list]:
+    """Operator picture: documents and entities. Chunks stay in Qdrant / Neo4j plumbing."""
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, str]] = []
-    docs = tx.run("MATCH (d:Document) RETURN d.filename AS filename, d.pages AS pages")
+    known: set[str] = set()
+
+    docs = tx.run(
+        """
+        MATCH (d:Document)
+        OPTIONAL MATCH (d)-[:HAS_CHUNK]->(c:Chunk)
+        OPTIONAL MATCH (c)-[:MENTIONS]->(e:Entity)
+        RETURN d.filename AS filename, d.pages AS pages,
+               count(DISTINCT c) AS chunks, count(DISTINCT e) AS entities
+        ORDER BY entities DESC, chunks DESC
+        LIMIT 12
+        """
+    )
     for record in docs:
         filename = record["filename"]
+        node_id = f"doc:{filename}"
+        known.add(node_id)
+        chunks = int(record["chunks"] or 0)
+        entities = int(record["entities"] or 0)
+        pages = int(record["pages"] or 0)
         nodes.append(
             {
-                "id": f"doc:{filename}",
+                "id": node_id,
                 "label": filename,
                 "kind": "document",
-                "detail": f"{record['pages'] or 0} pages",
+                "detail": f"{entities} entities · {chunks} fragments · {pages}p",
                 "layer": 0,
                 "row": len([node for node in nodes if node["kind"] == "document"]),
             }
         )
-    chunks = tx.run(
-        """
-        MATCH (d:Document)-[:HAS_CHUNK]->(c:Chunk)
-        RETURN d.filename AS filename, c.index AS index
-        ORDER BY filename, index
-        """
-    )
-    for record in chunks:
-        filename = record["filename"]
-        index = record["index"]
-        chunk_id = f"chunk:{filename}:{index}"
-        nodes.append(
-            {
-                "id": chunk_id,
-                "label": f"chunk {index}",
-                "kind": "chunk",
-                "detail": filename,
-                "layer": 1,
-                "row": len([node for node in nodes if node["kind"] == "chunk"]),
-            }
-        )
-        edges.append({"from": f"doc:{filename}", "to": chunk_id, "label": "HAS_CHUNK"})
+
     ents = tx.run(
         """
         MATCH (e:Entity)
-        RETURN e.key AS key, e.name AS name, e.kind AS kind
-        LIMIT 40
+        OPTIONAL MATCH (e)-[r:RELATES]-()
+        WITH e, count(r) AS degree
+        RETURN e.key AS key, e.name AS name, e.kind AS kind, degree
+        ORDER BY degree DESC, e.name
+        LIMIT 24
         """
     )
     for record in ents:
+        node_id = f"ent:{record['key']}"
+        known.add(node_id)
         nodes.append(
             {
-                "id": f"ent:{record['key']}",
+                "id": node_id,
                 "label": record["name"],
                 "kind": "entity",
-                "detail": record["kind"],
-                "layer": 2,
+                "detail": record["kind"] or "entity",
+                "layer": 1,
                 "row": len([node for node in nodes if node["kind"] == "entity"]),
             }
         )
+
     mentions = tx.run(
         """
-        MATCH (c:Chunk)-[:MENTIONS]->(e:Entity)
-        RETURN c.filename AS filename, c.index AS index, e.key AS key
+        MATCH (d:Document)-[:HAS_CHUNK]->(:Chunk)-[:MENTIONS]->(e:Entity)
+        RETURN DISTINCT d.filename AS filename, e.key AS key
         LIMIT 80
         """
     )
     for record in mentions:
-        edges.append(
-            {
-                "from": f"chunk:{record['filename']}:{record['index']}",
-                "to": f"ent:{record['key']}",
-                "label": "MENTIONS",
-            }
-        )
+        src = f"doc:{record['filename']}"
+        dst = f"ent:{record['key']}"
+        if src in known and dst in known:
+            edges.append({"from": src, "to": dst, "label": "MENTIONS"})
+
     rels = tx.run(
         """
         MATCH (a:Entity)-[r]->(b:Entity)
-        RETURN a.key AS src, b.key AS dst, type(r) AS rel
+        RETURN a.key AS src, b.key AS dst, type(r) AS rel, r.type AS rel_type
         LIMIT 40
         """
     )
     for record in rels:
-        edges.append({"from": f"ent:{record['src']}", "to": f"ent:{record['dst']}", "label": record["rel"]})
+        src = f"ent:{record['src']}"
+        dst = f"ent:{record['dst']}"
+        if src in known and dst in known:
+            label = record["rel_type"] or record["rel"] or "RELATES"
+            edges.append({"from": src, "to": dst, "label": str(label)})
     return {"nodes": nodes, "edges": edges}
 
 

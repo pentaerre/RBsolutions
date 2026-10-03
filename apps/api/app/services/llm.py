@@ -12,12 +12,6 @@ async def stream_llm(messages: list[dict[str, str]], model: str) -> AsyncIterato
         async for token in _stream_anthropic(messages, model):
             yield token
         return
-    try:
-        async for token in _stream_ollama_langchain(messages, model):
-            yield token
-        return
-    except Exception:
-        pass
     client = OllamaClient(settings)
     import json
 
@@ -28,8 +22,13 @@ async def stream_llm(messages: list[dict[str, str]], model: str) -> AsyncIterato
             if token:
                 yield token
             if event.get("done"):
-                break
-    except OllamaError as exc:
+                return
+    except OllamaError:
+        pass
+    try:
+        async for token in _stream_ollama_langchain(messages, model):
+            yield token
+    except Exception as exc:
         raise RuntimeError(str(exc)) from exc
 
 
@@ -68,22 +67,43 @@ async def _stream_anthropic(messages: list[dict[str, str]], model: str) -> Async
             yield text
 
 
-def complete_json(prompt: str, model: str | None = None) -> dict:
+def complete_json(
+    prompt: str,
+    model: str | None = None,
+    timeout: float = 45.0,
+    num_predict: int = 220,
+    json_mode: bool = False,
+) -> dict:
     import json
     import re
 
-    from langchain_core.messages import HumanMessage, SystemMessage
-    from langchain_ollama import ChatOllama
+    import httpx
+
+    if not settings.file_llm:
+        return {}
 
     chosen = model or settings.ollama_chat_model
-    llm = ChatOllama(base_url=settings.ollama_base_url, model=chosen, timeout=180)
-    result = llm.invoke(
-        [
-            SystemMessage(content="Return a single JSON object. No markdown."),
-            HumanMessage(content=prompt),
-        ]
-    )
-    text = result.content if isinstance(result.content, str) else str(result.content)
+    payload: dict = {
+        "model": chosen,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": "Return a single JSON object. No markdown."},
+            {"role": "user", "content": prompt},
+        ],
+        "options": {"temperature": 0, "num_predict": int(num_predict)},
+    }
+    if json_mode:
+        payload["format"] = "json"
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout, connect=3.0)) as client:
+            response = client.post(f"{settings.ollama_base_url.rstrip('/')}/api/chat", json=payload)
+            response.raise_for_status()
+            body = response.json()
+    except Exception:
+        return {}
+    text = (body.get("message") or {}).get("content") or ""
+    if not isinstance(text, str):
+        text = str(text)
     match = re.search(r"\{.*\}", text, flags=re.DOTALL)
     if not match:
         return {}

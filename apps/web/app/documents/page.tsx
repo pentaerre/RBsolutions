@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { apiGet, type DocumentFile, type ExtractedRow } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import { localizeDocStatus, localizeDocType, localizeSource } from "@/lib/catalog-i18n";
+import { formatClassifyNote, localizeDocType, localizeSource } from "@/lib/catalog-i18n";
+import { MethodBadge, PhaseBadge } from "@/components/document-card";
 
 export default function DocumentsPage() {
   const { t, locale } = useI18n();
@@ -85,11 +86,11 @@ export default function DocumentsPage() {
           <thead>
             <tr>
               <th>{t("docs.file")}</th>
+              <th>{t("docs.status")}</th>
+              <th>{t("docs.how")}</th>
+              <th>{t("docs.note")}</th>
               <th>{t("docs.type")}</th>
               <th>{t("docs.source")}</th>
-              <th>{t("docs.chunksCol")}</th>
-              <th>{t("docs.sqlCol")}</th>
-              <th>{t("docs.status")}</th>
             </tr>
           </thead>
           <tbody>
@@ -101,15 +102,19 @@ export default function DocumentsPage() {
               </tr>
             ) : (
               files.map((file) => (
-                <tr key={file.filename}>
+                <tr key={file.filename + (file.path || "")}>
                   <td>{file.filename}</td>
+                  <td>
+                    <PhaseBadge status={file.status || (file.indexed ? "indexed" : "received")} />
+                  </td>
+                  <td>
+                    <MethodBadge method={file.classify_method} />
+                  </td>
+                  <td className="muted">
+                    {formatClassifyNote(file.classify_method || "", file.classify_note || file.error || "", t)}
+                  </td>
                   <td>{file.doc_type ? localizeDocType(file.doc_type, locale) : "—"}</td>
                   <td>{file.source ? localizeSource(file.source, locale) : "—"}</td>
-                  <td>{file.chunks}</td>
-                  <td>{file.records || 0}</td>
-                  <td>
-                    {localizeDocStatus(file.status || (file.indexed ? "indexed" : "pending"), locale)}
-                  </td>
                 </tr>
               ))
             )}

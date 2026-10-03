@@ -14,6 +14,7 @@ from app.db.session import SessionLocal
 from app.deps import get_vectorstore
 from app.services.classify import classify_document
 from app.services.extract import extract_records
+from app.services.llm_agents import catalog_chat_model
 from app.services.graphstore import get_graphstore
 from app.services.parsers import SUPPORTED_SUFFIXES, parse_file
 from app.services.text import chunk_text
@@ -23,9 +24,13 @@ SKIP_NAMES = {"readme.md"}
 
 
 def inbox_dir(root: Path | None = None) -> Path:
-    path = Path(root or settings.documents_dir) / "inbox"
-    path.mkdir(parents=True, exist_ok=True)
-    return path
+    if root is not None:
+        path = Path(root) / "inbox"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+    from app.services.knobs import watch_root
+
+    return watch_root()
 
 
 def classified_dir(doc_type: str, root: Path | None = None) -> Path:
@@ -35,14 +40,28 @@ def classified_dir(doc_type: str, root: Path | None = None) -> Path:
 
 
 def discover_files(root: Path | None = None) -> list[Path]:
-    root = Path(root or settings.documents_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    inbox_dir(root)
+    documents = Path(root or settings.documents_dir)
+    documents.mkdir(parents=True, exist_ok=True)
+    from app.services.knobs import watch_recursive
+
+    inbox = inbox_dir(root)
+    recursive = True if root is not None else watch_recursive()
     found: list[Path] = []
-    for folder in (root, inbox_dir(root)):
-        for path in sorted(folder.iterdir()):
-            if path.is_file() and _is_supported(path):
-                found.append(path)
+    seen: set[str] = set()
+    candidates = inbox.rglob("*") if recursive else inbox.iterdir()
+    for path in sorted(candidates):
+        if not path.is_file() or not _is_supported(path) or _is_classified(path, documents):
+            continue
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        found.append(path)
+        seen.add(key)
+    if root is not None:
+        return found
+    for path in sorted(documents.iterdir()):
+        if path.is_file() and _is_supported(path) and not _is_classified(path) and str(path.resolve()) not in seen:
+            found.append(path)
     return found
 
 
@@ -52,33 +71,49 @@ def list_files(store: VectorStore | None = None, root: Path | None = None) -> li
     indexed = {item["filename"]: item for item in store.list_sources()}
     db = SessionLocal()
     try:
-        intake = {row.filename: row for row in db.query(IntakeDocument).all()}
+        intake: dict[str, IntakeDocument] = {}
+        for row in db.query(IntakeDocument).all():
+            intake[row.rel_path or row.filename] = row
+            intake.setdefault(row.filename, row)
     finally:
         db.close()
     files: list[dict[str, Any]] = []
     seen: set[str] = set()
     classified_root = root / "classified"
-    candidates = [*discover_files(root)]
+    candidates = [*discover_files()]
     if classified_root.exists():
         candidates.extend(sorted(classified_root.rglob("*")))
     for path in candidates:
-        if not path.is_file() or not _is_supported(path) or path.name in seen:
+        if not path.is_file() or not _is_supported(path):
             continue
-        seen.add(path.name)
+        key = str(path.resolve())
+        if key in seen:
+            continue
+        seen.add(key)
         info = indexed.get(path.name, {})
-        row = intake.get(path.name)
+        try:
+            rel = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+        except ValueError:
+            rel = path.name
+        row = intake.get(rel) or intake.get(path.name)
         filed = path.parent.parent.name == "classified"
         files.append(
             {
                 "filename": path.name,
+                "rel_path": rel,
                 "size_bytes": path.stat().st_size,
-                "indexed": path.name in indexed,
-                "chunks": info.get("chunks", 0),
+                "indexed": path.name in indexed or bool(row and row.rag_selected),
+                "chunks": (row.chunks if row and row.chunks else info.get("chunks", 0)),
                 "pages": (row.pages if row else info.get("pages", 0)),
                 "path": str(path),
                 "source": (row.source if row else "folder"),
                 "doc_type": (row.doc_type if row else (path.parent.name if filed else "")),
+                "taxonomy_l1": row.taxonomy_l1 if row else "",
+                "taxonomy_l2": row.taxonomy_l2 if row else "",
                 "status": (row.status if row else ("filed" if filed else "inbox")),
+                "classify_method": (getattr(row, "classify_method", "") if row else ""),
+                "classify_note": (getattr(row, "classify_note", "") if row else ""),
+                "error": (row.error if row else ""),
                 "records": row.records if row else 0,
             }
         )
@@ -90,7 +125,21 @@ def process_all(store: VectorStore | None = None, db: Session | None = None) -> 
     own_db = db is None
     db = db or SessionLocal()
     try:
-        results = [process_file(path, store, db) for path in discover_files()]
+        results = []
+        root = Path(settings.documents_dir).resolve()
+        done = {"classified", "indexed", "processed", "filed"}
+        for path in discover_files():
+            try:
+                rel = str(path.resolve().relative_to(root)).replace("\\", "/")
+            except ValueError:
+                rel = path.name
+            existing = (
+                db.query(IntakeDocument).filter(IntakeDocument.rel_path == rel).first()
+                or db.query(IntakeDocument).filter(IntakeDocument.filename == path.name).first()
+            )
+            if existing and existing.status in done:
+                continue
+            results.append(process_file(path, store, db))
         return {
             "files": len(results),
             "chunks": sum(item.get("chunks", 0) for item in results),
@@ -113,7 +162,7 @@ def process_file(path: Path, store: VectorStore | None = None, db: Session | Non
         parsed = parse_file(path)
         if parsed.get("error"):
             return {"filename": path.name, "chunks": 0, "status": "skipped", "error": parsed["error"]}
-        doc_type = classify_document(path, parsed.get("text") or "")
+        doc_type = classify_document(path, parsed.get("text") or "", model=catalog_chat_model(db, "triage"))
         chunks = chunk_text(parsed.get("text") or "", settings.chunk_size, settings.chunk_overlap)
         stored = 0
         if chunks:
@@ -128,7 +177,7 @@ def process_file(path: Path, store: VectorStore | None = None, db: Session | Non
                 get_graphstore().upsert_document(path.name, int(parsed.get("pages") or 0), chunks)
             except Exception:
                 pass
-        records = extract_records(doc_type, parsed, path.name)
+        records = extract_records(doc_type, parsed, path.name, model=catalog_chat_model(db, "extractor"))
         row = _upsert_intake(db, path, parsed, doc_type, stored, source=_source_for(path))
         _replace_records(db, row, records)
         dest = classified_dir(doc_type) / path.name
@@ -208,8 +257,8 @@ def extract_pending(db: Session | None = None) -> dict[str, Any]:
         results = []
         for path in discover_files():
             parsed = parse_file(path)
-            doc_type = classify_document(path, parsed.get("text") or "")
-            records = extract_records(doc_type, parsed, path.name)
+            doc_type = classify_document(path, parsed.get("text") or "", model=catalog_chat_model(db, "triage"))
+            records = extract_records(doc_type, parsed, path.name, model=catalog_chat_model(db, "extractor"))
             row = _upsert_intake(db, path, parsed, doc_type, 0, source=_source_for(path))
             _replace_records(db, row, records)
             row.records = len(records)
@@ -222,8 +271,11 @@ def extract_pending(db: Session | None = None) -> dict[str, Any]:
 
 
 def file_pending() -> dict[str, Any]:
+    held = _library_hold_paths()
     moved = []
     for path in discover_files():
+        if str(path.resolve()) in held:
+            continue
         parsed = parse_file(path)
         doc_type = classify_document(path, parsed.get("text") or "")
         dest = classified_dir(doc_type) / path.name
@@ -231,6 +283,21 @@ def file_pending() -> dict[str, Any]:
             shutil.move(str(path), str(dest))
         moved.append({"filename": path.name, "doc_type": doc_type, "path": str(dest)})
     return {"ok": True, "files": moved}
+
+
+def _library_hold_paths() -> set[str]:
+    db = SessionLocal()
+    try:
+        held: set[str] = set()
+        keep = {"received", "read", "classified", "filed", "indexed", "missing", "failed"}
+        for row in db.query(IntakeDocument).all():
+            if not (row.taxonomy_l1 or row.taxonomist_slug or (row.status or "") in keep):
+                continue
+            if row.abs_path:
+                held.add(str(Path(row.abs_path).resolve()))
+        return held
+    finally:
+        db.close()
 
 
 def list_records(db: Session | None = None, limit: int = 100) -> list[dict[str, Any]]:
@@ -294,6 +361,16 @@ def _is_supported(path: Path) -> bool:
     return path.suffix.lower() in SUPPORTED_SUFFIXES and path.name.lower() not in SKIP_NAMES
 
 
+def _is_classified(path: Path, root: Path | None = None) -> bool:
+    root = Path(root or settings.documents_dir)
+    classified = (root / "classified").resolve()
+    try:
+        Path(path).resolve().relative_to(classified)
+        return True
+    except ValueError:
+        return False
+
+
 def _source_for(path: Path, root: Path | None = None) -> str:
     root = Path(root or settings.documents_dir)
     if path.parent == inbox_dir(root):
@@ -315,15 +392,27 @@ def _upsert_intake(
     chunks: int,
     source: str,
 ) -> IntakeDocument:
-    row = db.query(IntakeDocument).filter(IntakeDocument.filename == path.name).first()
+    rel = str(path.name)
+    root = Path(settings.documents_dir)
+    try:
+        rel = str(path.resolve().relative_to(root.resolve())).replace("\\", "/")
+    except ValueError:
+        rel = path.name
+    row = db.query(IntakeDocument).filter(IntakeDocument.rel_path == rel).first()
     if row is None:
-        row = IntakeDocument(filename=path.name)
+        row = db.query(IntakeDocument).filter(IntakeDocument.filename == path.name).first()
+    if row is None:
+        row = IntakeDocument(filename=path.name, rel_path=rel)
         db.add(row)
+    row.filename = path.name
+    row.rel_path = rel
+    row.abs_path = str(path.resolve())
     row.source = source
     row.suffix = path.suffix.lower()
     row.doc_type = doc_type
     row.pages = int(parsed.get("pages") or 0)
     row.chunks = chunks
+    row.size_bytes = int(path.stat().st_size)
     row.text_preview = (parsed.get("text") or "")[:2000]
     row.status = "received"
     db.flush()

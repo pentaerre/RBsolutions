@@ -1,23 +1,43 @@
 ---
-description: Atrium north star — 2-person agent company, not a CRUD chatbot
+description: Atrium north star — industry trail, oficio vs instance, never a stray feature
 alwaysApply: true
 ---
 
 # Atrium
 
-Two people selling **agent-run automation** to companies of 100–1000 people. CRUD SaaS is too easy now. We sell **outcomes on channels they already use**, not another form.
+Two founders selling **agent-run automation** to firms of 100–1000 people. CRUD is cheap. They sell **outcomes on channels the client already uses**. Follow the industry’s wake (n8n credentials, UiPath assets, LangGraph assistants + bindings). Do the small wedges they do not: GraphRAG not dumpster RAG, two-level client taxonomy, human gates, folder/email/Telegram. Do not invent 280 fake employees.
+
+## Oficio → instance → binding (translate founder ideas before coding)
+
+| They say | Build | Do not build |
+|---|---|---|
+| A job (file, parse, notify) | One **oficio** in the catalog | A new species per vertical |
+| E&P vs Aircraft vs another client | Same oficio, new **instance** + utility assembly | “Aircraft Taxonomist” as a different job |
+| Mailbox, API, bot token | Named **credential binding** on the instance | A Custodian agent; secrets in Graph JSON; one global `.env` forever |
+| Knobs (folder, cadence, tree) | Fields on that instance `config` | A Configurator product |
+| Smart scheduler someday | Orchestrator + per-instance cadence **now** | Replace LangGraph with if-else |
+
+Reuse the specialist if the job already belongs to them (Parser parses; Courier notifies; Mailroom connects). Split only when the job is genuinely different.
+
+## When they name a utility
+
+1. Name the oficio (one job). Instance it per client if needed.
+2. Tool handler in `apps/api/app/runtime/tools.py`.
+3. Seed tool + agent + assignment + Orchestrator route in `apps/api/app/db/seed.py`.
+4. Admin → Graph shows the node/edge. Ask Scribe to sync the roster.
+5. Workspace/Admin is chrome. Screens do not own the work.
 
 ## Non-negotiables
 
-- New capability = **an agent + a tool in the catalog**. Not a random Python function with a button.
-- Orchestrator routes. Specialists do one job. Humans see the same graph as the model (Admin → Graph).
-- Do not add a second chatbot. Do not replace LangGraph with if-else. Do not add Chroma.
-- Mid-market IDP line stays: intake → parse → classify → GraphRAG and/or SQL → human review → notify (Telegram/email).
-- GraphRAG over vector-only RAG. Neo4j holds entities and relations; Qdrant holds chunk vectors; hybrid retrieve.
-- Local-first: Ollama on the host. Do not block the folder watcher on the 32b model (`EXTRACT_WITH_LLM` / graph LLM off by default).
-- Channels (Telegram, IMAP) are agents (Courier, Mailroom), not “integrations pages”.
-- Scribe keeps the AGENTS.md roster in sync with the catalog. Do not hand-copy agent lists.
+- New capability = **agent + tool + catalog + graph edge**. Not a Python function with a button.
+- Humans see the same graph as the model (Admin → Graph).
+- No second chatbot, CRM, website builder, or extra control plane.
+- Mid-market line: intake → parse → classify → GraphRAG and/or SQL → human review → notify.
+- GraphRAG (Neo4j + Qdrant), not vector-only. No Chroma.
+- Local Ollama. Do not block Watchman on the 32b model.
+- Channels are agents (Watchman, Mailroom, Courier), not an integrations page.
+- Secrets stay off the graph. Scribe owns `AGENTS.md` roster markers.
 
 ## When lost
 
-Read `AGENTS.md`, then `docs/HOW_IT_WORKS.md`. If a change is not an agent, a tool, or the graph those agents share, it is probably the wrong change.
+Read `AGENTS.md`, then `docs/HOW_IT_WORKS.md`. If it is not an oficio, an instance, a binding, a tool, or the graph those agents share, it is the wrong change.

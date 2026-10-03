@@ -7,10 +7,14 @@ export type OllamaModel = {
   parameter_size?: string | null;
 };
 
+export function shortModelName(name: string) {
+  return (name || "").replace(/:latest$/, "");
+}
+
 export function formatModelLabel(item: OllamaModel | string): string {
   if (typeof item === "string") {
-    return item.replace(/:latest$/, "");
+    return shortModelName(item);
   }
-  const short = item.name.replace(/:latest$/, "");
+  const short = shortModelName(item.name);
   return item.parameter_size ? `${short} · ${item.parameter_size}` : short;
 }

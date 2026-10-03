@@ -3,13 +3,10 @@
 import { useEffect, useState } from "react";
 import { apiGet, type AgentItem, type AppItem, type Health } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
-import {
-  localizeAgentSummary,
-  localizeAppSummary,
-  localizeKind,
-  localizeRole,
-} from "@/lib/catalog-i18n";
+import { localizeAgentSummary, localizeAppName, localizeAppSummary, localizeKind } from "@/lib/catalog-i18n";
 import { ModelToggle, pickModel, readStoredModel } from "@/lib/model-select";
+import { ModelBadge } from "@/components/model-badge";
+import { onRoster } from "@/lib/roster";
 
 export default function OverviewPage() {
   const { t, locale } = useI18n();
@@ -93,12 +90,15 @@ export default function OverviewPage() {
       <div className="card" style={{ marginTop: 20 }}>
         <h2>{t("home.agents")}</h2>
         <div className="tool-list" style={{ marginTop: 12 }}>
-          {agents.map((agent) => (
-            <div key={agent.id}>
-              <span className={`badge ${agent.status}`}>{localizeRole(agent.role, locale)}</span>
+          {agents.filter(onRoster).map((agent) => (
+            <article className="card" key={agent.id} style={{ margin: 0 }}>
+              <div className="chip-row">
+                <span className={`badge ${agent.status}`}>{t(`status.${agent.status}`)}</span>
+                {agent.uses_llm ? <ModelBadge name={agent.model} /> : null}
+              </div>
               <h3 style={{ marginTop: 8 }}>{agent.name}</h3>
               <p>{localizeAgentSummary(agent.slug, agent.summary, locale)}</p>
-            </div>
+            </article>
           ))}
         </div>
       </div>
@@ -108,7 +108,7 @@ export default function OverviewPage() {
           {apps.map((app) => (
             <div key={app.id}>
               <span className={`badge ${app.status}`}>{localizeKind(app.kind, locale)}</span>
-              <h3 style={{ marginTop: 8 }}>{app.name}</h3>
+              <h3 style={{ marginTop: 8 }}>{localizeAppName(app.slug, app.name, locale)}</h3>
               <p>{localizeAppSummary(app.slug, app.summary, locale)}</p>
             </div>
           ))}

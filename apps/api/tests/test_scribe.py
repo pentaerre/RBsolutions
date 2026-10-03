@@ -15,6 +15,10 @@ def test_scribe_roster_includes_live_agents(client) -> None:
     assert "Courier" in text
     assert "Graphsmith" in text
     assert "Scribe" in text
+    assert "Parked:" in text
+    assert "E&P Taxonomist" in text
+    assert "Bars Taxonomist" in text
+    assert "Advice Taxonomist" in text
 
 
 def test_scribe_patches_markers(tmp_path, client) -> None:

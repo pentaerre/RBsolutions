@@ -91,4 +91,6 @@ def test_new_specialists_route() -> None:
     assert choose_agent_slug("build the knowledge graph", CANONICAL_ROUTES, available) == "graphsmith"
     assert choose_agent_slug("show exceptions that need a human", CANONICAL_ROUTES, available) == "reviewer"
     assert choose_agent_slug("sync the context prompt", CANONICAL_ROUTES, available) == "scribe"
+    assert choose_agent_slug("ocr this scanned pdf", CANONICAL_ROUTES, available) == "reader"
+    assert choose_agent_slug("run the two-level taxonomy", CANONICAL_ROUTES, available) == "taxonomist"
     assert choose_agent_slug("What does the handbook say about leave?", CANONICAL_ROUTES, available) == "librarian"

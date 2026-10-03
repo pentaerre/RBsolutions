@@ -1,6 +1,6 @@
 import type { Locale } from "./locale";
 
-type GraphNode = { id: string; label: string; kind: string; detail?: string; layer?: number; row?: number };
+type GraphNode = { id: string; label: string; kind: string; detail?: string; layer?: number; row?: number; model?: string; count?: number; hot?: boolean };
 type GraphEdge = { from: string; to: string; label?: string };
 type GraphData = { nodes: GraphNode[]; edges: GraphEdge[] };
 
@@ -8,6 +8,7 @@ const NODE_ES: Record<string, { label?: string; detail?: string }> = {
   people: { label: "Operadores", detail: "Equipos de 100–1000 personas" },
   channels: { label: "Canales", detail: "Carpeta · IMAP · Telegram" },
   intake: { label: "Entrada" },
+  library: { label: "Biblioteca" },
   line: { label: "Línea documental" },
   memory: { label: "GraphRAG" },
   ledger: { label: "Libro" },
@@ -21,16 +22,21 @@ const NODE_ES: Record<string, { label?: string; detail?: string }> = {
   admin: { label: "Admin", detail: ":3001 plano de control" },
   watchman: { detail: "Ve archivos nuevos" },
   mailroom: { detail: "Descarga adjuntos" },
+  sentinel: { detail: "Clasifica la carta" },
   courier: { detail: "Telegram entra / sale" },
+  teams: { detail: "Webhook apagado" },
+  post: { detail: "SMTP apagado" },
   orchestrator: { label: "Orquestador", detail: "Enruta especialistas" },
-  parser: { detail: "PDF XLSX PPTX DOCX" },
+  parser: { detail: "PDF XLSX PPT PPTX DOC DOCX TXT" },
+  reader: { detail: "OCR + dos primeras páginas" },
+  taxonomist: { detail: "Taxonomía de dos niveles" },
   ingestor: { detail: "Ejecuta toda la línea" },
   architect: { detail: "Explica el mapa" },
   scribe: { detail: "Sincroniza prompts" },
   triage: { detail: "factura / política / …" },
   chunker: { detail: "Parte y embebe" },
   extractor: { detail: "Campos estructurados" },
-  clerk: { detail: "classified/{type}" },
+  clerk: { detail: "classified/{clase}/{subclase}" },
   reviewer: { detail: "Puerta humana" },
   graphsmith: { detail: "Entidades en Neo4j" },
   recorder: { detail: "Filas SQL" },
@@ -55,7 +61,12 @@ const EDGE_ES: Record<string, string> = {
   catalog: "catálogo",
   writes: "escribe",
   route: "ruta",
-  inbox: "bandeja",
+  "opt-in": "a petición",
+  calendar: "calendario",
+  ocr: "ocr",
+  taxonomy: "taxonomía",
+  "first pages": "primeras páginas",
+  "opt-in RAG": "RAG a petición",
   knowledge: "conocimiento",
   structured: "estructurado",
   exceptions: "excepciones",
@@ -80,6 +91,12 @@ const EDGE_ES: Record<string, string> = {
   "sync prompts": "sincroniza prompts",
   "file arrives": "llega archivo",
   attachment: "adjunto",
+  letter: "carta",
+  "stored letter": "carta guardada",
+  "who is this": "quién es",
+  brief: "brief",
+  alert: "alerta",
+  "shared inbox": "bandeja compartida",
   update: "actualiza",
   "saved file": "archivo guardado",
   handoff: "pasa",
@@ -104,6 +121,8 @@ const EDGE_ES: Record<string, string> = {
   HAS_CHUNK: "TIENE_FRAG",
   MENTIONS: "MENCIONA",
   RELATES: "RELACIONA",
+  CO_OCCURS: "CO-OCURRE",
+  RELATED: "RELACIONADO",
   SQL: "SQL",
   USES: "USA",
   CALLS: "LLAMA",
@@ -114,7 +133,7 @@ const EDGE_ES: Record<string, string> = {
 const STORES_ES = {
   postgres: "catálogo de apps/herramientas/agentes + filas SQL extraídas",
   qdrant: "vectores de fragmentos de documentos para RAG",
-  neo4j: "GraphRAG: documentos, fragmentos, entidades, relaciones",
+  neo4j: "GraphRAG: documentos y entidades (los fragmentos viven en Qdrant)",
   disabled: "desactivado",
 };
 
@@ -144,6 +163,11 @@ function localizeNode(node: GraphNode): GraphNode {
   }
   if (node.detail && /\bpages\b/i.test(node.detail)) {
     detail = node.detail.replace(/\b1 pages\b/i, "1 página").replace(/\bpages\b/i, "páginas");
+  }
+  if (node.detail && /entities/i.test(node.detail)) {
+    detail = (detail || node.detail)
+      .replace(/\bentities\b/g, "entidades")
+      .replace(/\bfragments\b/g, "fragmentos");
   }
   return { ...node, label, detail };
 }
