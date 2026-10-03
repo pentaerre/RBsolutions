@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db.models import Tool
 from app.deps import get_vectorstore
-from app.services import pipeline
+from app.services import library, pipeline
 from app.services.ingest import IngestService
 from app.services.mailroom import poll_mailbox
 
@@ -71,26 +71,69 @@ def _list_documents(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "tool": "documents.list", "files": ingest.list_files()}
 
 
-def _list_inbox(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
-    files = [item for item in pipeline.list_files() if item.get("status") != "processed"]
+def _list_inbox(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    result = library.register_arrivals(db)
+    files = [item for item in result.get("files") or [] if item.get("status") != "processed"]
     return {"ok": True, "tool": "intake.list", "inbox": str(pipeline.inbox_dir()), "files": files}
 
 
+def _register(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    result = library.register_arrivals(db)
+    return {"ok": True, "tool": "intake.register", **result}
+
+
 def _poll_mail(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    from app.services.sentinel import store_letters
+
     result = poll_mailbox(pipeline.inbox_dir())
     for item in result.get("saved") or []:
-        from app.db.models import IntakeDocument
-
-        row = db.query(IntakeDocument).filter(IntakeDocument.filename == item["filename"]).first()
-        if row is None:
-            row = IntakeDocument(filename=item["filename"])
-            db.add(row)
-        row.source = "email"
-        row.source_ref = item.get("subject") or item.get("from") or ""
-        row.status = "received"
-    if result.get("saved"):
+        path = pipeline.inbox_dir() / item["filename"]
+        library.register_path(db, path, source="email", source_ref=item.get("subject") or item.get("from") or "")
+    stored = store_letters(db, result.get("letters") or [])
+    if result.get("saved") or stored:
         db.commit()
     return {"ok": result.get("ok", False), "tool": "intake.poll_mail", **result}
+
+
+def _read(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "tool": "documents.read", **library.read_pending(db, filename=payload.get("filename"))}
+
+
+def _taxonomy_run(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    slug = str(payload.get("agent") or payload.get("taxonomist") or "")
+    return {"ok": True, "tool": "taxonomy.run", **library.run_cycle(db, slug or None)}
+
+
+def _taxonomy_list(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    slug = str(payload.get("agent") or payload.get("taxonomist") or "") or None
+    documents = library.list_documents(
+        db,
+        day=payload.get("day"),
+        l1=payload.get("l1"),
+        l2=payload.get("l2"),
+        q=payload.get("query") or payload.get("q") or payload.get("message"),
+        rag=payload.get("rag"),
+        source=payload.get("source"),
+        taxonomist=slug,
+    )
+    return {"ok": True, "tool": "taxonomy.list", "documents": documents, **library.meta(db, slug)}
+
+
+def _taxonomy_get(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    document_id = str(payload.get("id") or payload.get("document_id") or "")
+    item = library.get_document(db, document_id) if document_id else None
+    if item is None:
+        files = library.list_documents(db, q=str(payload.get("query") or payload.get("message") or ""))
+        item = files[0] if files else None
+    return {"ok": True, "tool": "taxonomy.get", "document": item}
+
+
+def _promote(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    ids = payload.get("ids") or []
+    filenames = payload.get("filenames") or []
+    if payload.get("filename"):
+        filenames = [*filenames, payload["filename"]]
+    return {"ok": True, "tool": "knowledge.promote", **library.promote(db, ids=ids, filenames=filenames)}
 
 
 def _parse(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
@@ -105,8 +148,31 @@ def _chunk(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "tool": "documents.chunk", **pipeline.chunk_pending()}
 
 
-def _file(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
-    return {"ok": True, "tool": "documents.file", **pipeline.file_pending()}
+def _file(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    tree = library.ensure_tree(db)
+    filed = library.file_classified(
+        db,
+        filename=payload.get("filename"),
+        document_id=payload.get("id") or payload.get("document_id"),
+    )
+    typed = pipeline.file_pending()
+    return {
+        "ok": True,
+        "tool": "documents.file",
+        "count": int(filed.get("count") or 0),
+        "files": filed.get("files") or [],
+        "folders": tree,
+        "typed": typed,
+    }
+
+
+def _folders_ensure(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    slug = str(payload.get("agent") or payload.get("taxonomist") or "") or None
+    return {"ok": True, "tool": "folders.ensure", **library.ensure_tree(db, slug)}
+
+
+def _folders_list(_db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "tool": "folders.list", **library.list_tree()}
 
 
 def _extract(db: Session, _: dict[str, Any]) -> dict[str, Any]:
@@ -155,18 +221,12 @@ def _graph_search(_db: Session, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _telegram_poll(db: Session, _: dict[str, Any]) -> dict[str, Any]:
-    from app.db.models import IntakeDocument
     from app.services.telegram import poll_updates
 
     result = poll_updates(pipeline.inbox_dir())
     for item in result.get("saved") or []:
-        row = db.query(IntakeDocument).filter(IntakeDocument.filename == item["filename"]).first()
-        if row is None:
-            row = IntakeDocument(filename=item["filename"])
-            db.add(row)
-        row.source = "telegram"
-        row.source_ref = item.get("chat_id") or ""
-        row.status = "received"
+        path = pipeline.inbox_dir() / item["filename"]
+        library.register_path(db, path, source="telegram", source_ref=item.get("chat_id") or "")
     if result.get("saved"):
         db.commit()
     return {"ok": result.get("ok", False), "tool": "telegram.poll", **result}
@@ -180,29 +240,73 @@ def _telegram_send(_db: Session, payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": result.get("ok", False), "tool": "telegram.send", **result}
 
 
+def _teams_send(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.channels import deliver
+
+    text = str(payload.get("text") or payload.get("message") or "")
+    result = deliver(db, "teams", text)
+    return {"ok": result.get("ok", False), "tool": "teams.send", **result}
+
+
+def _mail_send(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.channels import deliver
+
+    text = str(payload.get("text") or payload.get("message") or "")
+    result = deliver(db, "post", text)
+    return {"ok": result.get("ok", False), "tool": "mail.send", **result}
+
+
 def _review_list(db: Session, _: dict[str, Any]) -> dict[str, Any]:
     from app.services.reviewer import list_exceptions
 
     return {"ok": True, "tool": "review.list", **list_exceptions(db)}
 
 
+def _signals_scan(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
+    from app.services.sentinel import scan
+
+    letters = payload.get("letters")
+    if isinstance(letters, dict):
+        letters = [letters]
+    result = scan(db, letters if isinstance(letters, list) else None)
+    return {"ok": True, "tool": "signals.scan", **result}
+
+
+def _signals_list(db: Session, _: dict[str, Any]) -> dict[str, Any]:
+    from app.services.sentinel import list_signals
+
+    return {"ok": True, "tool": "signals.list", **list_signals(db)}
+
+
 BUILTIN = {
     "knowledge.search": _search,
     "knowledge.ingest": _ingest,
+    "knowledge.promote": _promote,
     "knowledge.graph_build": _graph_build,
     "knowledge.graph_search": _graph_search,
     "documents.list": _list_documents,
     "documents.parse": _parse,
+    "documents.read": _read,
     "documents.classify": _classify,
     "documents.chunk": _chunk,
     "documents.file": _file,
+    "folders.ensure": _folders_ensure,
+    "folders.list": _folders_list,
     "intake.list": _list_inbox,
+    "intake.register": _register,
     "intake.poll_mail": _poll_mail,
+    "taxonomy.run": _taxonomy_run,
+    "taxonomy.list": _taxonomy_list,
+    "taxonomy.get": _taxonomy_get,
     "records.extract": _extract,
     "records.list": _list_records,
     "telegram.poll": _telegram_poll,
     "telegram.send": _telegram_send,
+    "teams.send": _teams_send,
+    "mail.send": _mail_send,
     "review.list": _review_list,
+    "signals.scan": _signals_scan,
+    "signals.list": _signals_list,
     "models.list": _list_models,
     "platform.explain": _explain,
     "docs.sync": _docs_sync,

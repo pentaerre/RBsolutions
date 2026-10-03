@@ -6,11 +6,54 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Agent, AgentTool, App, Tool
+from app.services.llm_agents import assigned_model
+from app.services.taxonomy import INSTANCES, instance_config, instance_status, is_taxonomist
 
 CANONICAL_ROUTES = [
     {"match": ["telegram", "courier"], "agent": "courier"},
+    {"match": ["teams worker", "aviso teams", "teams channel"], "agent": "teams"},
+    {"match": ["post worker", "aviso por smtp", "outbound mail"], "agent": "post"},
     {"match": ["email", "imap", "mailbox", "attachment", "mailroom"], "agent": "mailroom"},
-    {"match": ["watch", "drop folder", "inbox folder", "waiting for a file"], "agent": "watchman"},
+    {
+        "match": [
+            "sentinel",
+            "shared inbox",
+            "bandeja compartida",
+            "churn",
+            "opportunity radar",
+            "riesgo legal",
+            "operations brief",
+            "señales de dirección",
+        ],
+        "agent": "sentinel",
+    },
+    {"match": ["watch", "drop folder", "inbox folder", "waiting for a file", "new arrivals"], "agent": "watchman"},
+    {"match": ["ocr", "read the document", "first two pages", "scanned pdf", "reader"], "agent": "reader"},
+    {
+        "match": ["aircraft taxonom", "avion taxonom", "taxonomist-aircraft"],
+        "agent": "taxonomist-aircraft",
+    },
+    {
+        "match": ["car taxonom", "automotive taxonom", "taxonomist-car"],
+        "agent": "taxonomist-car",
+    },
+    {
+        "match": ["factory taxonom", "planta taxonom", "taxonomist-factory"],
+        "agent": "taxonomist-factory",
+    },
+    {
+        "match": ["bars taxonom", "horeca", "distribuidor", "taxonomist-bars"],
+        "agent": "taxonomist-bars",
+    },
+    {
+        "match": ["advice taxonom", "asesoria", "laboral fiscal", "taxonomist-advice"],
+        "agent": "taxonomist-advice",
+    },
+    {
+        "match": ["taxonomy", "taxonomist", "two-level", "library calendar", "filing tree", "e&p class"],
+        "agent": "taxonomist",
+    },
+    {"match": ["promote to rag", "add to rag", "index selected"], "agent": "ingestor"},
     {"match": ["classify", "triage", "what type"], "agent": "triage"},
     {"match": ["chunk"], "agent": "chunker"},
     {"match": ["extract entities", "build the knowledge graph", "graphsmith"], "agent": "graphsmith"},
@@ -21,7 +64,7 @@ CANONICAL_ROUTES = [
     {"match": ["extract", "structured", "to sql", "into sql"], "agent": "extractor"},
     {"match": ["records", "sql rows"], "agent": "recorder"},
     {"match": ["exception", "review", "human gate", "approve"], "agent": "reviewer"},
-    {"match": ["organize", "classified", "file them"], "agent": "clerk"},
+    {"match": ["organize", "classified", "file them", "folder tree", "estructura de carpetas", "filing cabinet"], "agent": "clerk"},
     {"match": ["parse the", "parse files"], "agent": "parser"},
     {"match": ["ingest", "index", "reindex", "pipeline"], "agent": "ingestor"},
     {
@@ -41,7 +84,7 @@ def seed_catalog(db: Session) -> None:
             kind="experience",
             base_url=settings.workspace_url,
             status="live",
-            summary="Operator-facing portal: documents, knowledge chat, and extracted records.",
+            summary="Operator-facing portal: calendar of arrivals, taxonomy library, documents, and knowledge chat.",
         ),
         App(
             slug="admin",
@@ -54,18 +97,50 @@ def seed_catalog(db: Session) -> None:
     ]
     tools = [
         _tool("intake.list", "Watch inbox folder", "List files waiting in the drop folder / inbox.", "builtin:intake.list"),
+        _tool("intake.register", "Register arrivals", "Register new inbox files (including subfolders) without sending them to RAG.", "builtin:intake.register"),
         _tool("intake.poll_mail", "Poll mailbox", "Download supported email attachments into the inbox folder.", "builtin:intake.poll_mail"),
-        _tool("documents.parse", "Parse documents", "Extract text from PDF, XLSX, PPTX, DOCX, CSV.", "builtin:documents.parse"),
+        _tool(
+            "signals.scan",
+            "Scan shared inboxes",
+            "Judge stored shared-inbox letters for legal risk, unanswered commercial asks, and churn. Cross Neo4j and the SQL ledger.",
+            "builtin:signals.scan",
+        ),
+        _tool(
+            "signals.list",
+            "List direction briefs",
+            "List open operational signals waiting for a human.",
+            "builtin:signals.list",
+        ),
+        _tool("documents.parse", "Parse documents", "Extract text from PDF, XLSX, PPTX, PPT, DOCX, DOC, CSV, TXT.", "builtin:documents.parse"),
+        _tool("documents.read", "Read first pages", "OCR/extract the first two pages, write a summary and keywords (Reader).", "builtin:documents.read"),
         _tool("documents.classify", "Classify documents", "Triage files into invoice, contract, policy, report, spreadsheet, presentation, form, other.", "builtin:documents.classify"),
+        _tool("taxonomy.run", "Run taxonomy", "Two-level labels from path + filename + readable text. Clerk creates the folders and moves the files.", "builtin:taxonomy.run"),
+        _tool("taxonomy.list", "List taxonomy", "List classified library documents with filters.", "builtin:taxonomy.list"),
+        _tool("taxonomy.get", "Get document card", "Show summary, bytes, created date, absolute path, and keywords for one document.", "builtin:taxonomy.get"),
         _tool("documents.chunk", "Chunk for RAG", "Split parsed text and upsert chunks into Qdrant.", "builtin:documents.chunk"),
-        _tool("documents.file", "File documents", "Move processed files into classified/{type} folders.", "builtin:documents.file"),
+        _tool("documents.file", "File documents", "Clerk moves taxonomy-classified files into classified/{class}/{subclass}, then leftover IDP files by type.", "builtin:documents.file"),
+        _tool("folders.ensure", "Ensure classified folders", "Create classified/{class}/{subclass} from the live Taxonomist tree. Does not move files.", "builtin:folders.ensure"),
+        _tool("folders.list", "List classified folders", "Read the organized classified/ tree on disk.", "builtin:folders.list"),
         _tool("documents.list", "List documents", "List files and their pipeline status.", "builtin:documents.list"),
         _tool("knowledge.ingest", "Run pipeline", "Parse, classify, chunk, extract to SQL, index, and file every pending document.", "builtin:knowledge.ingest"),
+        _tool("knowledge.promote", "Promote to GraphRAG", "Index only the documents an operator selected. The library path never dumps everything into RAG.", "builtin:knowledge.promote"),
         _tool("knowledge.search", "GraphRAG search", "Hybrid retrieve: Qdrant vectors plus Neo4j entity neighbors.", "builtin:knowledge.search"),
         _tool("knowledge.graph_build", "Build knowledge graph", "Extract entities and relations from documents into Neo4j (Graphsmith).", "builtin:knowledge.graph_build"),
         _tool("knowledge.graph_search", "Search entities", "Look up entities and 1-hop neighbors in Neo4j (Pathfinder).", "builtin:knowledge.graph_search"),
         _tool("telegram.poll", "Poll Telegram", "Download supported files the bot was sent, and list recent texts.", "builtin:telegram.poll"),
         _tool("telegram.send", "Send Telegram", "Send a status message to the configured Telegram chat.", "builtin:telegram.send"),
+        _tool(
+            "teams.send",
+            "Send Teams",
+            "Post a direction brief to a Teams channel. The webhook URL stays in TEAMS_WEBHOOK_URL.",
+            "builtin:teams.send",
+        ),
+        _tool(
+            "mail.send",
+            "Send mail",
+            "Send a direction brief by email. SMTP settings stay in the server environment.",
+            "builtin:mail.send",
+        ),
         _tool("review.list", "List exceptions", "Show files and extracts that need a human (Reviewer).", "builtin:review.list"),
         _tool("records.extract", "Extract records", "Turn invoices and spreadsheets into structured rows (heuristic, optional LLM).", "builtin:records.extract"),
         _tool("records.list", "List SQL records", "Read structured rows written to Postgres.", "builtin:records.list"),
@@ -89,28 +164,83 @@ def seed_catalog(db: Session) -> None:
             name="Watchman",
             role="specialist",
             status="live",
-            summary="Waits on the drop folder / inbox and reports files that have arrived.",
+            summary="Waits on the drop folder / inbox (including subfolders) and registers arrivals. Does not dump them into RAG.",
             model=settings.ollama_chat_model,
-            system_prompt="You watch the documents inbox. Report pending files; do not guess contents.",
+            system_prompt="You watch the documents inbox. Register new files; never send them to RAG yourself.",
+            config_json=json.dumps({"watch_path": "inbox", "recursive": True}),
         ),
         Agent(
             slug="mailroom",
             name="Mailroom",
             role="specialist",
             status="live",
-            summary="Polls IMAP, downloads PDF/XLSX/PPTX attachments onto the server inbox.",
+            summary="Polls IMAP, downloads attachments (PDF, Office, text) onto the server inbox, and stores the letter for Sentinel.",
             model=settings.ollama_chat_model,
-            system_prompt="You collect email attachments. If IMAP is not configured, say exactly how to set it.",
+            system_prompt="You collect email attachments and store the letter. If IMAP is not configured, say exactly how to set it.",
+            config_json=json.dumps({"imap_folder": settings.imap_folder or "INBOX", "poll_seconds": settings.imap_poll_seconds or 0}),
+        ),
+        Agent(
+            slug="sentinel",
+            name="Sentinel",
+            role="specialist",
+            status="live",
+            summary=(
+                "Briefs direction from shared inboxes (pedidos, soporte, licitaciones). "
+                "Flags legal risk, stale commercial asks, and churn or SLA slips, then crosses the party with Neo4j and the SQL ledger. "
+                "Reviewer holds the brief. A high signal goes to the worker selected on notify: Courier (Telegram) now, Teams or Post when that agent is enabled. The message names the subject and the sender address. Does not call the 32b model."
+            ),
+            model="",
+            system_prompt=(
+                "You brief direction on shared-inbox letters. Use signals.scan and signals.list. "
+                "Do not invent penalties or contracts that the graph and the ledger did not return. "
+                "Do not draft a reply for the employee who received the mail."
+            ),
+            config_json=json.dumps(
+                {
+                    "mailboxes": "INBOX",
+                    "stale_hours": 24,
+                    "signals": "legal,opportunity,churn",
+                    "notify": "courier",
+                    "poll_seconds": 0,
+                    "roster": False,
+                }
+            ),
         ),
         Agent(
             slug="parser",
             name="Parser",
             role="specialist",
             status="live",
-            summary="Reads PDF, Excel, PowerPoint, and Word into plain text.",
+            summary="Reads PDF, Excel, PowerPoint, Word, and plain text into pages (Parser). Reader then OCRs and summarises.",
             model=settings.ollama_chat_model,
             system_prompt="You parse office files. Prefer tool output over guessing.",
         ),
+        Agent(
+            slug="reader",
+            name="Reader",
+            role="specialist",
+            status="live",
+            summary="OCR / best-effort extract of the first two pages: PDF, PPT/PPTX, DOC/DOCX, TXT and other readable files. Writes summary and keywords.",
+            model=settings.ollama_chat_model,
+            system_prompt="You read documents. OCR scanned PDFs when you can. Never index into RAG.",
+            config_json=json.dumps({"read_pages": 2}),
+        ),
+        *[
+            Agent(
+                slug=item["slug"],
+                name=item["name"],
+                role="specialist",
+                status=item.get("status") or instance_status(item["slug"]),
+                summary=(
+                    f"Two-level {instance_config(item['pack'])['taxonomy']['name']} taxonomy from path + filename + readable text. "
+                    f"Scope {instance_config(item['pack'])['scope_path']}. Same oficio as other Taxonomists; different client tree. Does not send files to RAG."
+                ),
+                model=settings.ollama_chat_model,
+                system_prompt="You file documents into a two-level taxonomy. Classify what the file is. Filename and Reader text beat the drop folder. An invoice under inbox/wells is still commercial/invoices.",
+                config_json=json.dumps(instance_config(item["pack"])),
+            )
+            for item in INSTANCES
+        ],
         Agent(
             slug="triage",
             name="Triage",
@@ -152,16 +282,16 @@ def seed_catalog(db: Session) -> None:
             name="Clerk",
             role="specialist",
             status="live",
-            summary="Files processed documents into classified/{type} folders.",
-            model=settings.ollama_chat_model,
-            system_prompt="You organize files on disk after triage.",
+            summary="Creates classified/{class}/{subclass} from the live Taxonomist tree and moves labeled files there. Also files the IDP line by type.",
+            model="",
+            system_prompt="You own the classified folder tree: create it, read it, and move labeled files into it. Do not classify.",
         ),
         Agent(
             slug="ingestor",
             name="Ingestor",
             role="specialist",
             status="live",
-            summary="Runs the full line: parse → classify → chunk → GraphRAG graph → extract/SQL → file.",
+            summary="Runs the full IDP line when asked: parse → classify → chunk → GraphRAG graph → extract/SQL → file. Not used for every inbox arrival.",
             model=settings.ollama_chat_model,
             system_prompt="You run the document pipeline. Prefer tool results over guessing.",
         ),
@@ -201,16 +331,36 @@ def seed_catalog(db: Session) -> None:
             name="Courier",
             role="specialist",
             status="live",
-            summary="Telegram channel: receive files into the inbox, notify when work finishes.",
+            summary="Telegram chatbot: receive files into the inbox, and deliver Sentinel briefs with subject and sender.",
             model=settings.ollama_chat_model,
             system_prompt="You are the Telegram agent. If the bot token is missing, say how to set TELEGRAM_BOT_TOKEN.",
+        ),
+        Agent(
+            slug="teams",
+            name="Teams",
+            role="specialist",
+            status="disabled",
+            summary="Teams worker for the same Sentinel brief. Parked until enabled. Set TEAMS_WEBHOOK_URL; the secret stays off the graph.",
+            model="",
+            system_prompt="You post a direction brief to Teams. If the webhook is missing, say how to set TEAMS_WEBHOOK_URL.",
+            config_json=json.dumps({"roster": False}),
+        ),
+        Agent(
+            slug="post",
+            name="Post",
+            role="specialist",
+            status="disabled",
+            summary="Outbound mail worker for the same Sentinel brief. Parked until enabled. Set SMTP_HOST and SMTP_TO; the secret stays off the graph.",
+            model="",
+            system_prompt="You email a direction brief. If SMTP is missing, say how to set SMTP_HOST and SMTP_TO.",
+            config_json=json.dumps({"roster": False}),
         ),
         Agent(
             slug="reviewer",
             name="Reviewer",
             role="specialist",
             status="live",
-            summary="Human gate: unclassified files, failed ingest, weak invoice rows.",
+            summary="Human gate: unclassified files, failed ingest, weak invoice rows, and open direction briefs.",
             model=settings.ollama_chat_model,
             system_prompt="You list exceptions that need a person. Do not auto-approve.",
         ),
@@ -244,19 +394,24 @@ def seed_catalog(db: Session) -> None:
     db.flush()
 
     assignments = {
-        "watchman": ["intake.list", "documents.list"],
+        "watchman": ["intake.register", "intake.list", "documents.list"],
         "mailroom": ["intake.poll_mail"],
+        "sentinel": ["signals.scan", "signals.list"],
         "parser": ["documents.parse"],
+        "reader": ["documents.read"],
+        **{item["slug"]: ["taxonomy.run", "taxonomy.list", "taxonomy.get"] for item in INSTANCES},
         "triage": ["documents.classify"],
         "chunker": ["documents.chunk"],
         "extractor": ["records.extract"],
         "recorder": ["records.list"],
-        "clerk": ["documents.file"],
-        "ingestor": ["knowledge.ingest", "documents.list"],
+        "clerk": ["documents.file", "folders.ensure", "folders.list"],
+        "ingestor": ["knowledge.ingest", "knowledge.promote", "documents.list"],
         "librarian": ["knowledge.search"],
         "graphsmith": ["knowledge.graph_build"],
         "pathfinder": ["knowledge.graph_search"],
         "courier": ["telegram.poll", "telegram.send"],
+        "teams": ["teams.send"],
+        "post": ["mail.send"],
         "reviewer": ["review.list"],
         "orchestrator": ["models.list"],
         "architect": ["platform.explain"],
@@ -278,10 +433,14 @@ def seed_catalog(db: Session) -> None:
             if not exists:
                 db.add(AgentTool(agent_id=agent.id, tool_id=tool.id))
     _refresh_orchestrator_routes(db)
+    _enforce_one_live_taxonomist(db)
     db.commit()
     from app.services.scribe import try_sync_docs
 
+    from app.services.knobs import ensure_taxonomist_scopes
+
     try_sync_docs(db)
+    ensure_taxonomist_scopes(db)
 
 
 def _tool(slug: str, name: str, summary: str, entrypoint: str) -> Tool:
@@ -303,6 +462,22 @@ def _refresh_orchestrator_routes(db: Session) -> None:
     payload = json.loads(row.config_json or "{}")
     payload["routes"] = CANONICAL_ROUTES
     row.config_json = json.dumps(payload)
+
+
+def _enforce_one_live_taxonomist(db: Session) -> None:
+    from app.services.taxonomy import exclusive_live, list_agents
+
+    agents = list_agents(db)
+    if not agents:
+        return
+    live = [row for row in agents if row.status == "live"]
+    if len(live) == 1:
+        return
+    if not live:
+        exclusive_live(db, "taxonomist")
+        return
+    preferred = next((row for row in live if row.slug == "taxonomist"), live[0])
+    exclusive_live(db, preferred.slug)
 
 
 def _upsert_app(db: Session, incoming: App) -> None:
@@ -338,5 +513,23 @@ def _upsert_agent(db: Session, incoming: Agent) -> None:
             row.system_prompt = incoming.system_prompt
         if incoming.config_json and incoming.slug == "orchestrator":
             row.config_json = incoming.config_json
+        incoming_cfg = json.loads(incoming.config_json or "{}") if incoming.config_json else {}
+        if is_taxonomist(incoming.slug, incoming_cfg):
+            row.name = incoming.name
+            stored = json.loads(row.config_json or "{}")
+            stored.setdefault("specialist", "taxonomist")
+            stored.setdefault("cadence", incoming_cfg.get("cadence") or "hour")
+            stored.setdefault("scope_path", incoming_cfg.get("scope_path") or "inbox")
+            if not stored.get("taxonomy") and incoming_cfg.get("taxonomy"):
+                stored["taxonomy"] = incoming_cfg["taxonomy"]
+            row.config_json = json.dumps(stored)
+        if incoming.config_json and incoming.slug in {"watchman", "mailroom", "reader", "sentinel", "teams", "post"}:
+            stored = json.loads(row.config_json or "{}")
+            incoming_cfg = json.loads(incoming.config_json or "{}")
+            for key, value in incoming_cfg.items():
+                stored.setdefault(key, value)
+            row.config_json = json.dumps(stored)
+        row.model = assigned_model(row.slug, row.model)
         return
+    incoming.model = assigned_model(incoming.slug, incoming.model)
     db.add(incoming)

@@ -13,6 +13,8 @@ Answer using the provided document excerpts when they are relevant.
 If the excerpts do not contain the answer, say so and then use general knowledge.
 Cite source filenames inline when you use them. Be concise and practical."""
 
+EXCERPT_CHARS = 320
+
 
 def build_messages(
     question: str,
@@ -22,11 +24,12 @@ def build_messages(
     if hits:
         blocks = []
         for index, hit in enumerate(hits, start=1):
+            text = (hit.get("text") or "")[:EXCERPT_CHARS]
             blocks.append(
                 f"[{index}] {hit.get('filename')} (chunk {hit.get('chunk_index')})"
                 + (f" entities: {', '.join(hit.get('entities') or [])}" if hit.get("entities") else "")
                 + (f" neighbors: {', '.join(hit.get('neighbors') or [])}" if hit.get("neighbors") else "")
-                + f"\n{hit.get('text')}"
+                + f"\n{text}"
             )
         context = "\n\n".join(blocks)
         user = (

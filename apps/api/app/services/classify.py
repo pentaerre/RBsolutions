@@ -24,7 +24,19 @@ _KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
 ]
 
 
-def classify_document(path: Path, text: str = "") -> str:
+def classify_document(path: Path, text: str = "", model: str | None = None) -> str:
+    guessed = _llm_type(path.name, text, model=model)
+    if guessed in DOC_TYPES and guessed != "other":
+        return guessed
+    heuristic = _heuristic_type(path, text)
+    if heuristic:
+        return heuristic
+    if guessed in DOC_TYPES:
+        return guessed
+    return "other"
+
+
+def _heuristic_type(path: Path, text: str) -> str:
     suffix = Path(path).suffix.lower()
     blob = f"{path.name}\n{text[:4000]}".lower()
     for doc_type, tokens in _KEYWORDS:
@@ -36,4 +48,20 @@ def classify_document(path: Path, text: str = "") -> str:
         return "presentation"
     if suffix in {".docx", ".doc"}:
         return "report"
-    return "other"
+    return ""
+
+
+def _llm_type(filename: str, text: str, model: str | None = None) -> str:
+    if not (text or "").strip():
+        return ""
+    from app.services.llm import complete_json
+
+    data = complete_json(
+        (
+            f"Classify this file as one of: {', '.join(DOC_TYPES)}. "
+            f"Name: {filename}\nText:\n{(text or '')[:2500]}\n"
+            'Return JSON {"type":"..."}.'
+        ),
+        model=model,
+    )
+    return str(data.get("type") or "").strip().lower()

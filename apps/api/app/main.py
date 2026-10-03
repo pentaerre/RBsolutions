@@ -9,10 +9,10 @@ from app.config import settings
 from app.db.seed import seed_catalog
 from app.db.session import SessionLocal, init_db
 from app.deps import get_vectorstore, reset_vectorstore
-from app.routers import agents, apps, chat, documents, graph, health, models, runtime
+from app.routers import agents, apps, chat, documents, graph, health, library, models, runtime, utilities
 from app.routers import catalog_tools
-from app.services.ingest import IngestService
-from app.watchers.folder import start_folder_watcher
+from app.watchers.folder import start_folder_watcher, stop_folder_watcher
+from app.watchers.scheduler import start_scheduler, stop_scheduler
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("atrium")
@@ -54,19 +54,16 @@ async def lifespan(_: FastAPI):
             time.sleep(1)
     if store is None:
         raise RuntimeError(f"Could not reach Qdrant: {last_error}")
-    ingest = IngestService(settings, store)
-    observer = None
     if settings.watch_documents:
-        observer = start_folder_watcher(settings, ingest)
+        start_folder_watcher(settings)
+        start_scheduler()
         if not store.count():
-            logger.info("Empty index; ingesting %s", settings.documents_dir)
-            ingest.ingest_all()
+            logger.info("Empty index; waiting for operators to promote documents into GraphRAG")
     try:
         yield
     finally:
-        if observer is not None:
-            observer.stop()
-            observer.join(timeout=2)
+        stop_scheduler()
+        stop_folder_watcher()
 
 
 app = FastAPI(title=f"{settings.app_name} Platform", lifespan=lifespan)
@@ -82,9 +79,11 @@ app.add_middleware(
 app.include_router(health.router, prefix=settings.api_prefix, tags=["system"])
 app.include_router(models.router, prefix=settings.api_prefix, tags=["models"])
 app.include_router(documents.router, prefix=settings.api_prefix, tags=["documents"])
+app.include_router(library.router, prefix=settings.api_prefix, tags=["library"])
 app.include_router(chat.router, prefix=settings.api_prefix, tags=["runtime"])
 app.include_router(runtime.router, prefix=settings.api_prefix, tags=["runtime"])
 app.include_router(apps.router, prefix=settings.api_prefix, tags=["catalog"])
 app.include_router(catalog_tools.router, prefix=settings.api_prefix, tags=["catalog"])
 app.include_router(agents.router, prefix=settings.api_prefix, tags=["catalog"])
+app.include_router(utilities.router, prefix=settings.api_prefix, tags=["catalog"])
 app.include_router(graph.router, prefix=settings.api_prefix, tags=["graph"])

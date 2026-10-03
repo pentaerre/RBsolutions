@@ -27,7 +27,9 @@ INVOICE_RE = re.compile(r"(?:invoice|factura|inv)[\s#:.-]*([A-Z0-9-]{3,})", re.I
 ORG_RE = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,3})\b")
 
 
-def extract_graph(text: str, filename: str = "") -> dict[str, Any]:
+def extract_graph(
+    text: str, filename: str = "", use_llm: bool = False, model: str | None = None
+) -> dict[str, Any]:
     entities: dict[str, dict[str, str]] = {}
     relations: list[dict[str, str]] = []
 
@@ -39,7 +41,10 @@ def extract_graph(text: str, filename: str = "") -> dict[str, Any]:
         entities[slug] = {"key": slug, "name": key, "kind": kind}
         return slug
 
+    extra = _llm_graph(text, filename, model=model) if use_llm else {}
     add(filename, "document")
+    for item in extra.get("entities") or []:
+        add(str(item.get("name") or ""), str(item.get("kind") or "entity"))
     for email in EMAIL_RE.findall(text or ""):
         add(email, "email")
     for money in MONEY_RE.findall(text or ""):
@@ -54,6 +59,18 @@ def extract_graph(text: str, filename: str = "") -> dict[str, Any]:
             continue
         add(token, "entity")
 
+    for link in extra.get("relations") or []:
+        left = str(link.get("from") or "").lower()
+        right = str(link.get("to") or "").lower()
+        if left in entities and right in entities:
+            relations.append(
+                {
+                    "from": left,
+                    "to": right,
+                    "type": str(link.get("type") or "RELATED"),
+                }
+            )
+
     keys = list(entities)
     for left, right in zip(keys, keys[1:]):
         if entities[left]["kind"] == "document" or entities[right]["kind"] == "document":
@@ -64,3 +81,23 @@ def extract_graph(text: str, filename: str = "") -> dict[str, Any]:
         if entities[left]["kind"] == "invoice" and entities[right]["kind"] == "entity":
             relations.append({"from": left, "to": right, "type": "MENTIONS_PARTY"})
     return {"entities": list(entities.values()), "relations": relations}
+
+
+def _llm_graph(text: str, filename: str, model: str | None = None) -> dict[str, Any]:
+    if not (text or "").strip():
+        return {}
+    from app.services.llm import complete_json
+
+    data = complete_json(
+        (
+            f"Extract named entities and relations from {filename}. "
+            'Return JSON {"entities":[{"name":"...","kind":"org|person|well|field|place|other"}],'
+            '"relations":[{"from":"...","to":"...","type":"RELATED"}]}. '
+            "Max 12 entities. Text:\n"
+            f"{(text or '')[:4000]}"
+        ),
+        model=model,
+    )
+    if not isinstance(data, dict):
+        return {}
+    return data

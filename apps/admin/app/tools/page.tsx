@@ -2,13 +2,17 @@
 
 import Link from "next/link";
 import { FormEvent, useEffect, useState } from "react";
-import { apiGet, apiSend, type ToolItem } from "@/lib/api";
+import { apiGet, apiSend, type AgentItem, type ToolItem } from "@/lib/api";
+import { ModelChip } from "@/components/model-chip";
 import { useI18n } from "@/lib/i18n";
 import { localizeKind, localizeToolName } from "@/lib/catalog-i18n";
+import type { OllamaModel } from "@/lib/models";
 
 export default function ToolsPage() {
   const { t, locale } = useI18n();
   const [tools, setTools] = useState<ToolItem[]>([]);
+  const [agents, setAgents] = useState<AgentItem[]>([]);
+  const [models, setModels] = useState<OllamaModel[]>([]);
   const [message, setMessage] = useState("");
   const [form, setForm] = useState({
     slug: "",
@@ -18,8 +22,26 @@ export default function ToolsPage() {
   });
 
   async function load() {
-    const payload = await apiGet<{ tools: ToolItem[] }>("/tools");
-    setTools(payload.tools);
+    const [toolPayload, agentPayload, ollama] = await Promise.all([
+      apiGet<{ tools: ToolItem[] }>("/tools"),
+      apiGet<{ agents: AgentItem[] }>("/agents"),
+      apiGet<{ models: OllamaModel[] }>("/models").catch(() => ({ models: [] as OllamaModel[] })),
+    ]);
+    setTools(toolPayload.tools);
+    setAgents(agentPayload.agents);
+    setModels(ollama.models || []);
+  }
+
+  async function pickModel(agent: AgentItem, model: string) {
+    const previous = agent.model;
+    setAgents((rows) => rows.map((row) => (row.id === agent.id ? { ...row, model } : row)));
+    try {
+      const saved = await apiSend<AgentItem>(`/agents/${agent.id}`, "PATCH", { model });
+      setAgents((rows) => rows.map((row) => (row.id === saved.id ? { ...row, model: saved.model } : row)));
+    } catch (err) {
+      setAgents((rows) => rows.map((row) => (row.id === agent.id ? { ...row, model: previous } : row)));
+      setMessage(err instanceof Error ? err.message : t("agents.saveFailed"));
+    }
   }
 
   useEffect(() => {
@@ -84,11 +106,15 @@ export default function ToolsPage() {
               <th>{t("tools.kind")}</th>
               <th>{t("tools.agents")}</th>
               <th>{t("tools.status")}</th>
+              <th>{t("agents.model")}</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
-            {tools.map((tool) => (
+            {tools.map((tool) => {
+              const owners = agents.filter((agent) => tool.agents.includes(agent.slug) && agent.uses_llm);
+              const owner = owners[0];
+              return (
               <tr key={tool.id}>
                 <td>
                   <Link href={`/tools/${tool.id}`}>{localizeToolName(tool.slug, tool.name, locale)}</Link>
@@ -100,12 +126,23 @@ export default function ToolsPage() {
                   <span className={`badge ${tool.status}`}>{t(`status.${tool.status}`)}</span>
                 </td>
                 <td>
+                  {owner ? (
+                    <ModelChip
+                      value={owner.model}
+                      models={models}
+                      onChange={owners.length === 1 && models.length ? (model) => pickModel(owner, model) : undefined}
+                      label={t("agents.model")}
+                    />
+                  ) : null}
+                </td>
+                <td>
                   <button className="btn secondary" onClick={() => toggle(tool)}>
                     {tool.status === "live" ? t("tools.disable") : t("tools.enable")}
                   </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>

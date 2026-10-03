@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db.models import Agent
+from app.services.taxonomy import is_taxonomist
 
 logger = logging.getLogger("atrium.scribe")
 
@@ -15,7 +16,8 @@ START = "<!-- atrium-roster:start -->"
 END = "<!-- atrium-roster:end -->"
 
 ROSTER_GROUPS: list[tuple[str, list[str], str]] = [
-    ("Intake", ["watchman", "mailroom", "courier"], ", "),
+    ("Intake", ["watchman", "mailroom", "sentinel", "courier", "teams", "post"], ", "),
+    ("Library", ["reader", "taxonomist"], ", "),
     ("Line", ["parser", "triage", "chunker", "graphsmith", "extractor", "recorder", "clerk"], " → "),
     ("Memory", ["pathfinder", "librarian"], ", "),
     ("Governance", ["reviewer", "architect", "orchestrator", "ingestor", "scribe"], ", "),
@@ -24,10 +26,15 @@ ROSTER_GROUPS: list[tuple[str, list[str], str]] = [
 HINTS = {
     "watchman": "folder",
     "mailroom": "IMAP",
+    "sentinel": "shared inboxes",
     "courier": "Telegram",
+    "teams": "webhook",
+    "post": "SMTP",
+    "reader": "OCR",
+    "taxonomist": "two-level taxonomy",
     "graphsmith": "entities",
     "recorder": "SQL",
-    "clerk": "file by type",
+    "clerk": "classified tree",
     "pathfinder": "GraphRAG retrieve",
     "librarian": "answer with that context",
     "reviewer": "exceptions",
@@ -67,10 +74,39 @@ def render_roster(db: Session) -> str:
                 continue
             used.add(slug)
             hint = HINTS.get(slug)
-            parts.append(f"{agent.name} ({hint})" if hint else agent.name)
+            parked = agent.status != "live"
+            if hint and parked:
+                parts.append(f"{agent.name} ({hint}, parked)")
+            elif hint:
+                parts.append(f"{agent.name} ({hint})")
+            elif parked:
+                parts.append(f"{agent.name} (parked)")
+            else:
+                parts.append(agent.name)
         if parts:
             lines.append(f"{title}: {joiner.join(parts)}.")
     leftover = [agent for slug, agent in sorted(agents.items()) if slug not in used]
+    extra_tax = [agent for agent in leftover if is_taxonomist(agent.slug)]
+    if extra_tax:
+        library_line = next((index for index, line in enumerate(lines) if line.startswith("Library:")), None)
+        extras = []
+        parked = []
+        still = []
+        for agent in leftover:
+            if not is_taxonomist(agent.slug):
+                still.append(agent)
+                continue
+            if agent.status == "live":
+                extras.append(agent.name)
+            else:
+                parked.append(agent.name)
+        if library_line is not None and extras:
+            base = lines[library_line].rstrip(".")
+            lines[library_line] = f"{base}, {', '.join(extras)}."
+        if library_line is not None and parked:
+            base = lines[library_line].rstrip(".")
+            lines[library_line] = f"{base}. Parked: {', '.join(parked)}."
+        leftover = still
     if leftover:
         names = ", ".join(agent.name for agent in leftover)
         lines.append(f"Also: {names}.")

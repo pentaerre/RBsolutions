@@ -2,11 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CrossAppLink, LanguageSelect, useI18n } from "@/lib/i18n";
+import { CrossAppLink, useI18n } from "@/lib/i18n";
+import { PrefsPanel } from "@/lib/theme";
 
 const LINKS = [
   { href: "/", key: "nav.overview" },
   { href: "/graph", key: "nav.graph" },
+  { href: "/utilities", key: "nav.utilities" },
   { href: "/apps", key: "nav.apps" },
   { href: "/tools", key: "nav.tools" },
   { href: "/agents", key: "nav.agents" },
@@ -35,11 +37,14 @@ export function Shell({ children }: { children: React.ReactNode }) {
           ))}
         </nav>
         <div className="sidebar-foot">
-          <LanguageSelect />
-          {t("foot.blurb")}
-          <div style={{ marginTop: 10 }}>
-            <CrossAppLink port={3000}>{t("foot.workspace")}</CrossAppLink>
-          </div>
+          <p className="foot-blurb">{t("foot.blurb")}</p>
+          <CrossAppLink port={3000}>
+            <div className="brand brand-cross">
+              <strong>XAVIER</strong>
+              <span>{t("foot.workspaceHint")}</span>
+            </div>
+          </CrossAppLink>
+          <PrefsPanel />
         </div>
       </aside>
       <main className="main">{children}</main>

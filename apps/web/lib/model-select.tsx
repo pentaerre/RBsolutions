@@ -25,11 +25,20 @@ export function writeStoredModel(name: string) {
   }
 }
 
+export function isHeavyCpuModel(name: string): boolean {
+  return /:(32|70|72)b\b/i.test(name);
+}
+
 export function pickModel(models: string[], preferred: string, stored: string): string {
-  if (stored && models.includes(stored)) {
+  const storedOk = Boolean(stored && models.includes(stored));
+  const preferredOk = Boolean(preferred && models.includes(preferred));
+  if (storedOk && isHeavyCpuModel(stored) && preferredOk && preferred !== stored) {
+    return preferred;
+  }
+  if (storedOk) {
     return stored;
   }
-  if (preferred && models.includes(preferred)) {
+  if (preferredOk) {
     return preferred;
   }
   return models[0] || preferred || "";
@@ -40,7 +49,8 @@ export function formatModelLabel(item: OllamaModel | string): string {
     return item.replace(/:latest$/, "");
   }
   const short = item.name.replace(/:latest$/, "");
-  return item.parameter_size ? `${short} · ${item.parameter_size}` : short;
+  const heavy = isHeavyCpuModel(item.name) ? " · CPU" : "";
+  return item.parameter_size ? `${short} · ${item.parameter_size}${heavy}` : `${short}${heavy}`;
 }
 
 export function ModelToggle({

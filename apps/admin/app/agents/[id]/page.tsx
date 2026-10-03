@@ -3,8 +3,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { apiGet, apiSend, type AgentItem, type ToolItem } from "@/lib/api";
+import { KnobFields, setNested } from "@/components/knob-fields";
+import { ModelChip } from "@/components/model-chip";
 import { useI18n } from "@/lib/i18n";
-import { formatModelLabel, type OllamaModel } from "@/lib/models";
+import type { OllamaModel } from "@/lib/models";
 
 export default function AgentDetailPage() {
   const { t } = useI18n();
@@ -41,6 +43,22 @@ export default function AgentDetailPage() {
     setAgent({ ...agent, tools: next });
   }
 
+  async function pickModel(model: string) {
+    if (!agent) {
+      return;
+    }
+    const previous = agent.model;
+    setAgent({ ...agent, model });
+    setMessage("");
+    try {
+      const saved = await apiSend<AgentItem>(`/agents/${agent.id}`, "PATCH", { model });
+      setAgent((current) => (current ? { ...current, model: saved.model } : saved));
+    } catch (err) {
+      setAgent({ ...agent, model: previous });
+      setMessage(err instanceof Error ? err.message : t("agents.saveFailed"));
+    }
+  }
+
   async function onSubmit(event: FormEvent) {
     event.preventDefault();
     if (!agent) {
@@ -49,6 +67,9 @@ export default function AgentDetailPage() {
     setMessage("");
     try {
       const parsed = JSON.parse(config);
+      for (const field of agent.knobs || []) {
+        setNested(parsed, field.key, field.value);
+      }
       const saved = await apiSend<AgentItem>(`/agents/${agent.id}`, "PATCH", {
         name: agent.name,
         status: agent.status,
@@ -59,6 +80,7 @@ export default function AgentDetailPage() {
         tools: agent.tools,
       });
       setAgent(saved);
+      setConfig(JSON.stringify(saved.config || {}, null, 2));
       setMessage(t("agents.saved"));
     } catch (err) {
       setMessage(err instanceof Error ? err.message : t("agents.saveFailed"));
@@ -77,6 +99,17 @@ export default function AgentDetailPage() {
           <p>
             {agent.role} · {agent.slug}
           </p>
+          <div className="chip-row" style={{ marginTop: 10 }}>
+            <span className={`badge ${agent.status}`}>{t(`status.${agent.status}`)}</span>
+            {agent.uses_llm ? (
+              <ModelChip
+                value={agent.model}
+                models={models}
+                onChange={models.length ? pickModel : undefined}
+                label={t("agents.model")}
+              />
+            ) : null}
+          </div>
         </div>
         <button className="btn secondary" onClick={() => router.push("/agents")}>
           {t("agents.back")}
@@ -97,23 +130,6 @@ export default function AgentDetailPage() {
           </select>
         </label>
         <label>
-          {t("agents.model")}
-          {models.length ? (
-            <select value={agent.model} onChange={(e) => setAgent({ ...agent, model: e.target.value })}>
-              {agent.model && !models.some((item) => item.name === agent.model) ? (
-                <option value={agent.model}>{agent.model}</option>
-              ) : null}
-              {models.map((item) => (
-                <option key={item.name} value={item.name}>
-                  {formatModelLabel(item)}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input value={agent.model} onChange={(e) => setAgent({ ...agent, model: e.target.value })} />
-          )}
-        </label>
-        <label>
           {t("agents.summary")}
           <textarea value={agent.summary} onChange={(e) => setAgent({ ...agent, summary: e.target.value })} />
         </label>
@@ -121,10 +137,32 @@ export default function AgentDetailPage() {
           {t("agents.prompt")}
           <textarea value={agent.system_prompt} onChange={(e) => setAgent({ ...agent, system_prompt: e.target.value })} />
         </label>
-        <label>
-          {t("agents.config")}
+        {(agent.knobs || []).length ? (
+          <div>
+            <div className="muted" style={{ marginBottom: 8 }}>
+              {t("knobs.title")}
+            </div>
+            <KnobFields
+              knobs={agent.knobs || []}
+              onChange={(key, value) => {
+                const nextKnobs = (agent.knobs || []).map((field) => (field.key === key ? { ...field, value } : field));
+                let parsed: Record<string, unknown> = {};
+                try {
+                  parsed = JSON.parse(config);
+                } catch {
+                  parsed = { ...(agent.config || {}) };
+                }
+                setNested(parsed, key, value);
+                setAgent({ ...agent, knobs: nextKnobs, config: parsed });
+                setConfig(JSON.stringify(parsed, null, 2));
+              }}
+            />
+          </div>
+        ) : null}
+        <details>
+          <summary>{t("agents.config")}</summary>
           <textarea value={config} onChange={(e) => setConfig(e.target.value)} />
-        </label>
+        </details>
         <div>
           <div className="muted" style={{ marginBottom: 8 }}>
             {t("agents.tools")}

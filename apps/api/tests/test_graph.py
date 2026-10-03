@@ -39,9 +39,24 @@ def test_graph_endpoint(client: TestClient) -> None:
     assert any(node["id"] == "scribe" for node in body["detail"]["nodes"])
     assert any(node["id"] == "memory" for node in body["architecture"]["nodes"])
     assert any(node["id"] == "graphsmith" for node in body["detail"]["nodes"])
+    reader = next(node for node in body["detail"]["nodes"] if node["id"] == "reader")
+    assert reader.get("model")
+    watchman = next(node for node in body["detail"]["nodes"] if node["id"] == "watchman")
+    assert not watchman.get("model")
+    hop_reader = next(hop for hop in body["flow"]["hops"] if hop["id"] == "reader")
+    assert hop_reader.get("model")
+    hop_watchman = next(hop for hop in body["flow"]["hops"] if hop["id"] == "watchman")
+    assert not hop_watchman.get("model")
     assert any(node["id"] == "hybrid" for node in body["rag"]["method"]["nodes"])
     assert "knowledge" in body["rag"]
-    assert "explain" in body
+    assert "flow" in body
+    assert body["flow"]["hops"]
+    assert {hop["id"] for hop in body["flow"]["hops"]} >= {"watchman", "reader", "taxonomist", "clerk"}
+    knowledge = body["rag"]["knowledge"]
+    assert all(node.get("kind") != "chunk" for node in knowledge["nodes"])
+    assert any(node["id"] == "people" for node in body["architecture"]["nodes"])
+    assert any(node["id"] == "watchman" for node in body["flow"]["line"]["nodes"])
+    assert len(body["flow"]["line"]["nodes"]) <= 8
 
 
 def test_architect_chat(client: TestClient) -> None:

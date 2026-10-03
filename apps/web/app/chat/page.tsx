@@ -5,6 +5,7 @@ import { apiGet, type ChatEvent } from "@/lib/api";
 import { useI18n } from "@/lib/i18n";
 import {
   ModelToggle,
+  isHeavyCpuModel,
   pickModel,
   readStoredModel,
   writeStoredModel,
@@ -149,6 +150,7 @@ export default function ChatPage() {
         </div>
         <ModelToggle models={models} value={model} onChange={setModel} label={t("chat.model")} />
       </div>
+      {isHeavyCpuModel(model) ? <p className="muted">{t("chat.cpuHint")}</p> : null}
       <div className="chat-wrap">
         <div className="messages">
           {messages.map((message, index) => (
@@ -169,7 +171,10 @@ export default function ChatPage() {
                 </div>
               ) : null}
               <div className={`bubble ${message.role}`}>
-                {message.content || (busy && index === messages.length - 1 ? t("chat.thinking") : "")}
+                {message.content
+                  || (busy && index === messages.length - 1
+                    ? t("chat.writing", { model: message.model || model || "Ollama" })
+                    : "")}
               </div>
             </div>
           ))}
